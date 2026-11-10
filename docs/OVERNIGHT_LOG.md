@@ -39,3 +39,28 @@ Timestamped journal of the overnight work (GPUs 1 and 2 only; GPU 3 stays free).
   A deeper crouch needs a different home stance, not a different limit.
 - **23:50** Scoring policy for the dry run restarted on v4: `dry_score_v4_150M`, GPU 2. Tracking env changes exported
   as `patches/open_duck_playground/0011-*.patch`.
+- **00:30** Pilot 1 evaluated (`results/pilot1_eval_v1.json`, GIF `results/pilot1_rollouts.gif`): 28/28 clips complete,
+  0 falls, but it **does not walk**: it stands in a wide stance and shuffles. Leg error 0.25–0.67 rad rms on gaits
+  (score 3.2–7.5) vs 0.04 rad on crouches (score 0.8). The score separates categories, not clips within them.
+- **00:40** The v4 scoring policy (home-based actions) shows the same standing basin in its reward terms: the legs term
+  pays 0.08/step and keypoints 0.05/step out of 1, flat after 60M, while alive / orientation / yaw / velocity keep
+  rising; leg error grows during training (15 → 44). Cause: actions are offsets from the **home pose**, so tracking a
+  gait needs large coordinated actions while standing needs none.
+- **00:55** Fix under test: **reference feed-forward**, joint target = reference pose + 0.25 × action (zero action
+  replays the clip; `ref_feedforward`, now the default). A/B at 50M: `ab_ff_50M` (GPU 1, current widths) and
+  `ab_ff_wide_50M` (GPU 2, leg width 0.3 rad, keypoints 5 cm). `TRACKING_OVERRIDES` (JSON of flattened config keys)
+  added for ablations. Home-based baselines that finished: `dry_score_v4_150M`, `dry_full_v4_100M`.
+- **01:20** **A/B result: reference feed-forward fixes the standing basin.** At 50M (`curation/analysis/compare_runs.py`):
+
+  | run | leg error (rad) | episode length | legs term / step | keypoints term / step |
+  |---|---|---|---|---|
+  | home-based (`dry_score_v4_150M` at 54M) | 0.267 | 139 | 0.08 | 0.05 |
+  | feed-forward (`ab_ff_50M`) | **0.058** | 160 | 0.70 | 0.58 |
+  | feed-forward + wide widths (`ab_ff_wide_50M`, at 36M) | 0.064 | 155 | 0.66 | 0.48 |
+
+  Wider reward widths add nothing at matched steps (0.068 vs 0.068 at 25M), so the widths stay. Feed-forward is the
+  default from patch 0012. Home-based checkpoints must be evaluated with `TRACKING_OVERRIDES='{"ref_feedforward": false}'`.
+- **01:20** Home-based scoring policy per clip (`results/dry_run/score_home_v4_all.json`): all gaits complete but
+  untracked (leg error 0.25–0.69 rad). **Unseen head moves fall 4/4** (nod, look-around; val/test), while the trained
+  head moves (tilt, shake) score best of all: a generalization failure within a category.
+- **01:22** Dry run restarted on the feed-forward env: scoring policy `dry_score_ff_100M` (GPU 1).
