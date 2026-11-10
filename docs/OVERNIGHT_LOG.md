@@ -90,3 +90,15 @@ Timestamped journal of the overnight work (GPUs 1 and 2 only; GPU 3 stays free).
   test: walk_fwd completion 1.00 → 0.75 (0.6 m/s) → 0.44 (1.5 m/s). New `curation/analysis/compare_conditions.py`
   (P.7–P.9: per condition, paired Δe with bootstrap CI, per category, pass bar). Full condition test-scored:
   `results/dry_run/test/full_{nominal,push03,push06,fric06}.json`.
+- **03:14** τ chosen (`results/dry_run/tau_choice.json`). Val means: p40 1.006 (21 clips), p55 0.986 (23), p70 0.962
+  (27), p85 0.962 (32). **τ* = p85**, but the result carries little information: all four candidates lie within 0.044 of
+  each other, inside the 0.05 tie band, so the P.4 rule ("ties go to the larger subset") would pick p85 regardless.
+  The only val clip that separates them is `turn_in_place 0.30 gentle` (1.19–1.50). For the PREREG: either shrink the
+  tie band or score τ on more val rollouts / seeds. Curated (32 clips) and random seed 0 launched at 100M (GPU 1 / 2).
+- **04:02** Curated finished; kinematic (32 clips) launched on GPU 1. **Matching bug found:** P.5's random draw stopped
+  at 90% of the curated duration, and since every clip is 200 frames, random always got about 10% less data (29 clips,
+  5,800 frames vs 6,400). Fixed in `select_subsets.py` (stop at the total closest to the target; seed 0 now gives 32).
+  The dry-run random run keeps its 29 clips, which slightly favours curated. This is a caveat on the dry-run result
+  only. Random also happens to draw no march clip.
+- **04:03** Test evaluation chained on the cluster (`tools_dry/eval_finals.sh`): curated now, random and kinematic as
+  their training ends.

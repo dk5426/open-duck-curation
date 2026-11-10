@@ -1,0 +1,25 @@
+{
+ "candidates": [
+  {
+   "tau": "p40",
+   "mean_val_score": 1.0062652753459083,
+   "clips": 21
+  },
+  {
+   "tau": "p55",
+   "mean_val_score": 0.9858972528742418,
+   "clips": 23
+  },
+  {
+   "tau": "p70",
+   "mean_val_score": 0.9620196156203745,
+   "clips": 27
+  },
+  {
+   "tau": "p85",
+   "mean_val_score": 0.9619304089082612,
+   "clips": 32
+  }
+ ],
+ "tau_star": "p85"
+}

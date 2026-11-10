@@ -56,13 +56,14 @@ def kinematic_subset(man, train_ids, n):
 
 
 def random_subset(man, train_ids, target_frames, seed):
-    """P.5: uniform draw without replacement until the duration is within 10% of the target."""
+    """P.5: uniform draw without replacement, stopping at the total duration closest to the target (the old 90% stop
+    always left random about 10% shorter than curated, since every clip is 200 frames)."""
     rng = np.random.default_rng(seed)
     length = {c["id"]: c["length"] for c in man["clips"]}
     order = list(rng.permutation(sorted(train_ids)))
     out, total = [], 0
     for i in order:
-        if total >= 0.9 * target_frames:
+        if abs(total + length[i] - target_frames) >= abs(total - target_frames):
             break
         out.append(i)
         total += length[i]
