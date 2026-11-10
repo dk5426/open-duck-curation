@@ -1,0 +1,44 @@
+{
+ "crouch": {
+  "perfect": 7.099999904632568,
+  "stand": 6.959850311279297,
+  "ratio": 1.0201368689102612,
+  "worst_clip": "crouch__depth0.25__fast",
+  "worst_ratio": 1.0029400928053305
+ },
+ "side_step": {
+  "perfect": 7.075041055679321,
+  "stand": 3.1613038778305054,
+  "ratio": 2.238013594736954,
+  "worst_clip": "side_step__dx0_dy0.03_dth0__gentle",
+  "worst_ratio": 2.21221175726254
+ },
+ "turn_in_place": {
+  "perfect": 6.948843002319336,
+  "stand": 2.926831449781145,
+  "ratio": 2.3741862562119653,
+  "worst_clip": "turn_in_place__dx0_dy0_dth-0.15__normal",
+  "worst_ratio": 2.266947141077893
+ },
+ "walk_back": {
+  "perfect": 7.075759768486023,
+  "stand": 3.2175570726394653,
+  "ratio": 2.1991093269657376,
+  "worst_clip": "walk_back__dx-0.02_dy0_dth0__normal",
+  "worst_ratio": 2.1338465078564224
+ },
+ "walk_fwd": {
+  "perfect": 7.075692653656006,
+  "stand": 3.1899869441986084,
+  "ratio": 2.218094549422543,
+  "worst_clip": "walk_fwd__dx0.02_dy0_dth0__normal",
+  "worst_ratio": 2.142093015138276
+ },
+ "walk_turn": {
+  "perfect": 7.01593001683553,
+  "stand": 2.9402804374694824,
+  "ratio": 2.386143147241325,
+  "worst_clip": "walk_turn__dx0.04_dy0_dth-0.15__normal",
+  "worst_ratio": 2.363354583156001
+ }
+}

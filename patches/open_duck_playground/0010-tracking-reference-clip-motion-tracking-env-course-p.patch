@@ -1,0 +1,375 @@
+From 6a01512816b0faa475d76198d2a3451b365030ba Mon Sep 17 00:00:00 2001
+From: Dhawal Kabra <dk5426@nyu.edu>
+Date: Mon, 9 Nov 2026 23:19:22 -0500
+Subject: [PATCH 10/10] tracking: reference-clip motion tracking env (course project
+ S3.1-S3.5)
+
+One clip per episode from a clip library (CURATION_LIBRARY, CURATION_CLIPS); 152-dim deployable actor
+observation with reference preview; privileged critic; bounded Gaussian tracking rewards with no
+command gating; reference-state initialisation; name-based DR with +-1 cm CoM and floor surfaces.
+---
+ playground/open_duck_mini_v2/runner.py   |   3 +-
+ playground/open_duck_mini_v2/tracking.py | 330 +++++++++++++++++++++++
+ 2 files changed, 332 insertions(+), 1 deletion(-)
+ create mode 100644 playground/open_duck_mini_v2/tracking.py
+
+diff --git a/playground/open_duck_mini_v2/runner.py b/playground/open_duck_mini_v2/runner.py
+index 66eeaa6..c7ef4b7 100644
+--- a/playground/open_duck_mini_v2/runner.py
++++ b/playground/open_duck_mini_v2/runner.py
+@@ -5,7 +5,7 @@ import argparse
+ from playground.common import randomize
+ from playground.common.runner import BaseRunner
+ from playground.open_duck_mini_v2 import joystick, standing, getup, jump, joystick_sdr
+-from playground.open_duck_mini_v2 import getup_back, getup_back2, getup_back3, getup_real, getup_real2, joystick_sdr_com1cm, jump2
++from playground.open_duck_mini_v2 import getup_back, getup_back2, getup_back3, getup_real, getup_real2, tracking, joystick_sdr_com1cm, jump2
+ 
+ 
+ class OpenDuckMiniV2Runner(BaseRunner):
+@@ -25,6 +25,7 @@ class OpenDuckMiniV2Runner(BaseRunner):
+             "getup_back3": (getup_back3, getup_back3.GetupBack3),
+             "getup_real": (getup_real, getup_real.GetupReal),
+             "getup_real2": (getup_real2, getup_real2.GetupReal2),
++            "tracking": (tracking, tracking.Tracking),
+         }
+         if args.env not in available_envs:
+             raise ValueError(f"Unknown env {args.env}")
+diff --git a/playground/open_duck_mini_v2/tracking.py b/playground/open_duck_mini_v2/tracking.py
+new file mode 100644
+index 0000000..b729be0
+--- /dev/null
++++ b/playground/open_duck_mini_v2/tracking.py
+@@ -0,0 +1,330 @@
++"""Reference-clip motion tracking for Open Duck Mini V2 (course project, S3.1-S3.5). Local addition, not upstream.
++
++One reference clip per episode, from a clip library built by open-duck-curation/curation/clips/make_library.py
++(library.npz + manifest.json). The episode ends when the clip ends (or on a fall). Which clips are trained on is set by
++CURATION_CLIPS (a JSON list of clip ids); without it, every clip of the manifest's "train" split. Everything else
++(observations, rewards, randomization, PPO settings) is fixed, so dataset conditions differ only in the clip list.
++
++Actor observation (152, all available on the robot):
++  gyro 3, accelerometer 3, joint pos - home 14, 0.05 * joint vel 14, last 3 actions 42, motor targets 14,
++  foot contacts 2, reference joints - home 14, reference joints at +5 / +10 / +20 frames (- home) 42,
++  reference body-frame vx, vy, yaw rate 3, reference base height - home height 1.
++Critic (privileged): actor obs + body-frame linear velocity 3, angular velocity 3, gravity in body frame 3, base
++  height 1, joint torques 14, true foot contacts 2, clip progress 1, frames left 1.
++Rewards (bounded Gaussians, no command gating, so a clip that stands still or crouches is rewarded for tracking):
++  leg joints, head joints, body-relative keypoints (feet, knees, head), body-frame base velocity, yaw rate, base height,
++  base orientation (gravity direction), foot-contact match; penalties: action rate, torque, foot slip, falling.
++Actions: targets = home + 0.25 * action, clipped to the joint ranges and to 5.24 rad/s; 0-1 step action delay
++  (the robot's measured loop runs the policy and sends targets within one 20 ms step).
++"""
++
++import json
++import os
++from typing import Any, Dict, Optional, Union
++
++import jax
++import jax.numpy as jp
++import numpy as np
++from ml_collections import config_dict
++from mujoco import mjx
++from mujoco.mjx._src import math
++
++from mujoco_playground._src import mjx_env
++from mujoco_playground._src.collision import geoms_colliding
++
++from . import base as open_duck_mini_v2_base
++from . import constants
++from .getup import make_randomizer as _getup_randomizer
++
++LIBRARY_DIR = os.environ.get("CURATION_LIBRARY", "../open-duck-curation/data/clips_v1")
++KEYPOINTS = [("site", "left_foot"), ("site", "right_foot"), ("body", "knee_and_ankle_assembly"),
++             ("body", "knee_and_ankle_assembly_3"), ("body", "head_assembly")]
++PREVIEW = (5, 10, 20)
++LEGS = np.r_[0:5, 9:14]
++HEAD = np.r_[5:9]
++
++PPO_OVERRIDES = {"episode_length": 200}
++
++
++def default_config() -> config_dict.ConfigDict:
++    return config_dict.create(
++        ctrl_dt=0.02,
++        sim_dt=0.002,
++        episode_length=200,
++        action_repeat=1,
++        action_scale=0.25,
++        dof_vel_scale=0.05,
++        max_motor_velocity=5.24,
++        rsi_prob=0.5,           # reference-state initialisation: start mid-clip half the time
++        rsi_tail=60,            # never start in the last 60 frames
++        terminate_tilt=0.6,     # end the episode when gravity's body-z component drops below this (~53 deg)
++        terminate_height=0.08,  # ... or when the base is this far from the reference height (m)
++        noise_config=config_dict.create(
++            level=1.0, action_min_delay=0, action_max_delay=2,
++            scales=config_dict.create(hip_pos=0.03, knee_pos=0.05, ankle_pos=0.08, joint_vel=2.5, gyro=0.1,
++                                      accelerometer=0.05),
++        ),
++        reward_config=config_dict.create(
++            scales=config_dict.create(
++                legs=2.0, head=0.3, keypoints=1.5, lin_vel=1.0, yaw_rate=0.5, height=0.5, orientation=0.5,
++                contacts=0.3, alive=0.5,
++                action_rate=-0.05, torques=-1.0e-3, foot_slip=-1.0, termination=-20.0,
++            ),
++            # Gaussian widths, as the error at which the term pays exp(-1): sized to typical errors, so no term is flat
++            sigma=config_dict.create(legs=0.15, head=0.15, keypoints=0.03, lin_vel=0.08, yaw_rate=0.4,
++                                     height=0.015, orientation=0.15),
++        ),
++    )
++
++
++def load_library(path=LIBRARY_DIR):
++    lib = np.load(os.path.join(path, "library.npz"))
++    man = json.load(open(os.path.join(path, "manifest.json")))
++    return lib, man
++
++
++def select_clips(man, ids=None):
++    """Indices of the clips to train on: CURATION_CLIPS (JSON list of ids) if set, else the train split."""
++    if ids is None and os.environ.get("CURATION_CLIPS"):
++        ids = json.load(open(os.environ["CURATION_CLIPS"]))
++    by_id = {c["id"]: c["index"] for c in man["clips"]}
++    if ids is not None:
++        missing = [i for i in ids if i not in by_id]
++        assert not missing, f"unknown clip ids: {missing}"
++        return np.array([by_id[i] for i in ids])
++    return np.array([c["index"] for c in man["clips"] if c["split"] == "train"])
++
++
++def _quat_to_mat_np(q):
++    w, x, y, z = q[..., 0], q[..., 1], q[..., 2], q[..., 3]
++    return np.stack([
++        np.stack([1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)], -1),
++        np.stack([2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)], -1),
++        np.stack([2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)], -1)], -2)
++
++
++class Tracking(open_duck_mini_v2_base.OpenDuckMiniV2Env):
++    """Track one reference clip per episode."""
++
++    def __init__(self, task: str = "flat_terrain_backlash", config: config_dict.ConfigDict = None,
++                 config_overrides: Optional[Dict[str, Union[str, int, list[Any]]]] = None, clip_ids=None):
++        super().__init__(xml_path=constants.task_to_xml(task).as_posix(), config=config or default_config(),
++                         config_overrides=config_overrides)
++        self._post_init(clip_ids)
++
++    def _post_init(self, clip_ids) -> None:
++        m = self._mj_model
++        self._home_q = jp.array(m.keyframe("home").qpos)
++        self._default_actuator = jp.array(m.keyframe("home").ctrl)
++        self._ctrl_lo = jp.array(m.actuator_ctrlrange[:, 0])
++        self._ctrl_hi = jp.array(m.actuator_ctrlrange[:, 1])
++        self._nu = m.nu
++        self._home_z = float(m.keyframe("home").qpos[2])
++
++        lib, man = load_library()
++        self._manifest = man
++        idx = select_clips(man, clip_ids)
++        self._clip_index = idx
++        self._clip_ids = [man["clips"][int(i)]["id"] for i in idx]
++        sel = lambda k: np.asarray(lib[k])[idx]  # noqa: E731
++        q = sel("q")
++        self._ref_q = jp.array(q)
++        self._ref_qd = jp.array(sel("qd"))
++        self._ref_pos = jp.array(sel("base_pos"))
++        self._ref_quat = jp.array(sel("base_quat"))
++        self._ref_lin = jp.array(sel("lin_vel"))
++        self._ref_ang = jp.array(sel("ang_vel"))
++        self._ref_contacts = jp.array(sel("contacts"))
++        self._ref_kp = jp.array(sel("keypts"))
++        self._ref_len = jp.array(np.asarray(lib["length"])[idx])
++        R = _quat_to_mat_np(sel("base_quat"))
++        self._ref_grav = jp.array(np.einsum("ntji,j->nti", R, np.array([0.0, 0.0, -1.0])))  # gravity in body frame
++        self._n_clips = len(idx)
++        self._T = q.shape[1]
++
++        self._floor_geom_id = m.geom("floor").id
++        self._feet_geom_id = np.array([m.geom(n).id for n in constants.FEET_GEOMS])
++        self._feet_site_id = np.array([m.site(n).id for n in constants.FEET_SITES])
++        self._base_body_id = m.body("base").id
++        self._kp_site = np.array([m.site(n).id for k, n in KEYPOINTS if k == "site"])
++        self._kp_body = np.array([m.body(n).id for k, n in KEYPOINTS if k == "body"])
++        qns = np.zeros(self._nu)
++        for i, j in enumerate(self.actuator_names):
++            nc = self._config.noise_config.scales
++            qns[i] = nc.hip_pos if "_hip" in j else nc.knee_pos if "_knee" in j else nc.ankle_pos if "_ankle" in j else 0.0
++        self._qpos_noise_scale = jp.array(qns)
++
++    # ------------------------------------------------------------------ helpers
++    def _ref(self, clip, k):
++        k = jp.minimum(k, self._ref_len[clip] - 1)
++        return dict(q=self._ref_q[clip, k], qd=self._ref_qd[clip, k], pos=self._ref_pos[clip, k],
++                    quat=self._ref_quat[clip, k], lin=self._ref_lin[clip, k], ang=self._ref_ang[clip, k],
++                    contacts=self._ref_contacts[clip, k], kp=self._ref_kp[clip, k], grav=self._ref_grav[clip, k])
++
++    def _feet_contact(self, data):
++        return jp.array([geoms_colliding(data, g, self._floor_geom_id) for g in self._feet_geom_id])
++
++    def _base_frame(self, data):
++        return data.xpos[self._base_body_id], data.xmat[self._base_body_id]
++
++    def _keypoints(self, data):
++        p0, R = self._base_frame(data)
++        pts = jp.concatenate([data.site_xpos[self._kp_site], data.xpos[self._kp_body]])
++        return (pts - p0) @ R  # body frame (R^T (p - p0)), rows in KEYPOINTS order: sites then bodies
++
++    def _body_lin_vel(self, data):
++        _, R = self._base_frame(data)
++        return R.T @ self.get_global_linvel(data)
++
++    def _body_ang_vel(self, data):
++        _, R = self._base_frame(data)
++        return R.T @ self.get_global_angvel(data)
++
++    # -------------------------------------------------------------------- reset
++    def reset(self, rng: jax.Array) -> mjx_env.State:
++        rng, k_clip, k_rsi, k_start = jax.random.split(rng, 4)
++        clip = jax.random.randint(k_clip, (), 0, self._n_clips)
++        L = self._ref_len[clip]
++        start = jp.where(jax.random.uniform(k_rsi) < self._config.rsi_prob,
++                         jax.random.randint(k_start, (), 0, jp.maximum(L - self._config.rsi_tail, 1)), 0)
++        return self.reset_to(rng, clip, start)
++
++    def reset_to(self, rng: jax.Array, clip, start) -> mjx_env.State:
++        """Start a given clip (index into this env's clip set) at a given frame; used by evaluation (start = 0)."""
++        rng, k_yaw = jax.random.split(rng)
++        ref = self._ref(clip, start)
++        yaw = jax.random.uniform(k_yaw, (1,), minval=-jp.pi, maxval=jp.pi)
++        yq = math.axis_angle_to_quat(jp.array([0.0, 0.0, 1.0]), yaw)
++        quat = math.quat_mul(yq, ref["quat"])
++        qpos = self._home_q
++        qpos = qpos.at[0:3].set(jp.array([0.0, 0.0, ref["pos"][2]]))
++        qpos = qpos.at[3:7].set(quat)
++        qpos = self.set_actuator_joints_qpos(ref["q"], qpos)
++        Rw = math.quat_to_mat(quat)
++        qvel = jp.zeros(self.mjx_model.nv)
++        qvel = self.set_floating_base_qvel(jp.concatenate([Rw @ ref["lin"], Rw @ ref["ang"]]), qvel)
++        qvel = self.set_actuator_joints_qvel(ref["qd"], qvel)
++        ctrl = jp.clip(ref["q"], self._ctrl_lo, self._ctrl_hi)
++        data = mjx_env.init(self.mjx_model, qpos=qpos, qvel=qvel, ctrl=ctrl)
++
++        info = {"rng": rng, "clip": clip, "frame": start, "start": start,
++                "last_act": jp.zeros(self._nu), "last_last_act": jp.zeros(self._nu),
++                "last_last_last_act": jp.zeros(self._nu), "motor_targets": ctrl,
++                "action_history": jp.zeros(self._config.noise_config.action_max_delay * self._nu),
++                "prev_feet": data.site_xpos[self._feet_site_id]}
++        metrics = {f"reward/{k}" if v > 0 else f"cost/{k}": jp.zeros(())
++                   for k, v in self._config.reward_config.scales.items()}
++        for k in ("err/legs_rms", "err/head_rms", "err/keypoints", "err/lin_vel", "err/yaw_rate", "progress"):
++            metrics[k] = jp.zeros(())
++        obs = self._get_obs(data, info, self._feet_contact(data))
++        reward, done = jp.zeros(2)
++        return mjx_env.State(data, obs, reward, done, metrics, info)
++
++    # --------------------------------------------------------------------- step
++    def step(self, state: mjx_env.State, action: jax.Array) -> mjx_env.State:
++        info = state.info
++        info["rng"], k_delay = jax.random.split(info["rng"])
++        hist = jp.roll(info["action_history"], self._nu).at[: self._nu].set(action)
++        info["action_history"] = hist
++        idx = jax.random.randint(k_delay, (1,), self._config.noise_config.action_min_delay,
++                                 self._config.noise_config.action_max_delay)
++        act = hist.reshape((-1, self._nu))[idx[0]]
++        tgt = jp.clip(self._default_actuator + act * self._config.action_scale, self._ctrl_lo, self._ctrl_hi)
++        lim = self._config.max_motor_velocity * self.dt
++        tgt = jp.clip(tgt, info["motor_targets"] - lim, info["motor_targets"] + lim)
++        data = mjx_env.step(self.mjx_model, state.data, tgt, self.n_substeps)
++        info["motor_targets"] = tgt
++        info["frame"] = info["frame"] + 1
++
++        contact = self._feet_contact(data)
++        ref = self._ref(info["clip"], info["frame"])
++        terms, errs, fell = self._terms(data, action, info, ref, contact)
++        sc = self._config.reward_config.scales
++        reward = sum(terms[k] * sc[k] for k in terms)
++        reward = jp.nan_to_num(reward * self.dt)
++        clip_end = info["frame"] >= self._ref_len[info["clip"]] - 1
++        done = fell | clip_end | jp.isnan(data.qpos).any() | jp.isnan(data.qvel).any()
++
++        info["last_last_last_act"] = info["last_last_act"]
++        info["last_last_act"] = info["last_act"]
++        info["last_act"] = action
++        info["prev_feet"] = data.site_xpos[self._feet_site_id]
++        for k, v in terms.items():
++            state.metrics[f"reward/{k}" if sc[k] > 0 else f"cost/{k}"] = v
++        for k, v in errs.items():
++            state.metrics[k] = v
++        obs = self._get_obs(data, info, contact)
++        return state.replace(data=data, obs=obs, reward=reward, done=done.astype(reward.dtype))
++
++    def _terms(self, data, action, info, ref, contact):
++        sg = self._config.reward_config.sigma
++        q = self.get_actuator_joints_qpos(data.qpos)
++        e_legs = jp.sqrt(jp.mean(jp.square(q[LEGS] - ref["q"][LEGS])))
++        e_head = jp.sqrt(jp.mean(jp.square(q[HEAD] - ref["q"][HEAD])))
++        kp = self._keypoints(data)
++        e_kp = jp.mean(jp.linalg.norm(kp - ref["kp"], axis=-1))
++        v = self._body_lin_vel(data)
++        e_v = jp.linalg.norm(v[:2] - ref["lin"][:2])
++        w = self._body_ang_vel(data)
++        e_w = jp.abs(w[2] - ref["ang"][2])
++        h = data.qpos[2]
++        e_h = jp.abs(h - ref["pos"][2])
++        _, R = self._base_frame(data)
++        g = R.T @ jp.array([0.0, 0.0, -1.0])
++        e_g = jp.linalg.norm(g - ref["grav"])
++        feet = data.site_xpos[self._feet_site_id]
++        slip = jp.sum(contact * jp.sum(jp.square((feet - info["prev_feet"])[:, :2] / self.dt), axis=-1))
++        fell = (-g[2] < self._config.terminate_tilt) | (e_h > self._config.terminate_height)
++        gauss = lambda e, s: jp.exp(-jp.square(e / s))  # noqa: E731
++        terms = {
++            "legs": gauss(e_legs, sg.legs), "head": gauss(e_head, sg.head), "keypoints": gauss(e_kp, sg.keypoints),
++            "lin_vel": gauss(e_v, sg.lin_vel), "yaw_rate": gauss(e_w, sg.yaw_rate), "height": gauss(e_h, sg.height),
++            "orientation": gauss(e_g, sg.orientation),
++            "contacts": jp.mean((contact > 0.5) == (ref["contacts"] > 0.5)).astype(jp.float32),
++            "alive": jp.array(1.0),
++            "action_rate": jp.sum(jp.square(action - info["last_act"])),
++            "torques": jp.sum(jp.square(data.actuator_force)),
++            "foot_slip": slip,
++            "termination": fell.astype(jp.float32),
++        }
++        errs = {"err/legs_rms": e_legs, "err/head_rms": e_head, "err/keypoints": e_kp, "err/lin_vel": e_v,
++                "err/yaw_rate": e_w, "progress": info["frame"] / self._ref_len[info["clip"]]}
++        return terms, errs, fell
++
++    # ------------------------------------------------------------- observation
++    def _get_obs(self, data, info, contact):
++        nc = self._config.noise_config
++        info["rng"], k1, k2, k3, k4 = jax.random.split(info["rng"], 5)
++        gyro = self.get_gyro(data)
++        acc = self.get_accelerometer(data)
++        jq = self.get_actuator_joints_qpos(data.qpos)
++        bl = self.get_actuator_backlash_qpos(data.qpos)
++        for i in self.backlash_idx_to_add:
++            bl = jp.insert(bl, i, 0)
++        jq = jq + bl
++        jv = self.get_actuator_joints_qvel(data.qvel)
++        u = lambda k, s: (2 * jax.random.uniform(k, s) - 1) * nc.level  # noqa: E731
++        n_gyro = gyro + u(k1, gyro.shape) * nc.scales.gyro
++        n_acc = acc + u(k2, acc.shape) * nc.scales.accelerometer
++        n_q = jq + u(k3, jq.shape) * self._qpos_noise_scale
++        n_v = jv + u(k4, jv.shape) * nc.scales.joint_vel
++        clip, k = info["clip"], info["frame"]
++        ref = self._ref(clip, k)
++        prev = jp.concatenate([self._ref(clip, k + p)["q"] - self._default_actuator for p in PREVIEW])
++        state = jp.hstack([
++            n_gyro, n_acc, n_q - self._default_actuator, n_v * self._config.dof_vel_scale,
++            info["last_act"], info["last_last_act"], info["last_last_last_act"], info["motor_targets"], contact,
++            ref["q"] - self._default_actuator, prev, ref["lin"][:2], ref["ang"][2:3], ref["pos"][2:3] - self._home_z,
++        ])
++        _, R = self._base_frame(data)
++        L = self._ref_len[clip]
++        privileged = jp.hstack([
++            state, self._body_lin_vel(data), self._body_ang_vel(data), R.T @ jp.array([0.0, 0.0, -1.0]),
++            data.qpos[2], data.actuator_force, contact, k / L, (L - k) / 200.0,
++        ])
++        return {"state": state, "privileged_state": privileged}
++
++
++def make_randomizer(mj_model, com_scale=0.2):
++    """Name-based DR ids, +-1 cm trunk CoM (com_scale 0.2 of upstream's +-5 cm), floor surfaces (getup.py)."""
++    return _getup_randomizer(mj_model, com_scale)
+-- 
+2.50.1
+
