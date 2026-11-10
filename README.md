@@ -22,6 +22,8 @@ PPO).
 | [`docs/TRACKER.md`](docs/TRACKER.md) | Snapshot of the task tracker. The live tracker is a shared web page; ask Dhawal for access |
 | [`docs/AUDIT.md`](docs/AUDIT.md) | What already exists for each project step, what is partial, what is missing; compute budget; literature |
 | [`docs/SETUP.md`](docs/SETUP.md) | How the upstream pipeline was reproduced, the upstream bugs found, training cost, walker results |
+| [`docs/DATASET.md`](docs/DATASET.md) | Reference-clip dataset v1 (28 clips: gaits and crouches), how it is made, checks, splits; GIFs in `results/clips_v1/` |
+| [`docs/ROBOT_TESTS.md`](docs/ROBOT_TESTS.md) | Every test that needs the robot, in the order to run them |
 
 ## What is in this repository
 
@@ -35,6 +37,9 @@ PPO).
 | `policies/` | Trained ONNX policies (walker and get-up), with the robot's 50 Hz contract |
 | `robot_logs/` | Real-robot recordings (50 Hz: observation, action, targets, joint positions, raw IMU, commands, loop timing), 2026-10-30 to 2026-11-02 |
 | `robot_patches/` | Changes installed on the robot's runtime, each as a diff with its README and off-robot tests |
+| `curation/` | Project code: clip generation and checks (`clips/`), log analyses (`analysis/`) |
+| `data/clips_v1/` | The clip library (`library.npz`, `manifest.json`, `splits.json`) and the gait generator presets |
+| `results/` | Analysis results and GIFs |
 
 ## Setup
 

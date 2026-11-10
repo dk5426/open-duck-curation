@@ -1,0 +1,867 @@
+{
+ "fps": 50,
+ "joints": [
+  "left_hip_yaw",
+  "left_hip_roll",
+  "left_hip_pitch",
+  "left_knee",
+  "left_ankle",
+  "neck_pitch",
+  "head_pitch",
+  "head_yaw",
+  "head_roll",
+  "right_hip_yaw",
+  "right_hip_roll",
+  "right_hip_pitch",
+  "right_knee",
+  "right_ankle"
+ ],
+ "keypoints": [
+  "left_foot",
+  "right_foot",
+  "left_knee",
+  "right_knee",
+  "head"
+ ],
+ "split_seed": 7,
+ "max_crouch_drop_m": 0.008,
+ "servo_max_speed_rad_s": 4.7,
+ "clips": [
+  {
+   "id": "side_step__dx0_dy-0.03_dth0__gentle",
+   "category": "side_step",
+   "source": "side_step__dx0_dy-0.03_dth0",
+   "split": "train",
+   "params": {
+    "dx": 0.0,
+    "dy": -0.03,
+    "dtheta": 0.0,
+    "style": "gentle",
+    "single_support_s": 0.4,
+    "foot_lift_m": 0.015,
+    "mean_vx": -0.0009,
+    "mean_vy": -0.0476,
+    "mean_yaw_rate": 0.0112
+   },
+   "check": {
+    "joint_limit_margin_rad": 0.0275,
+    "peak_joint_speed_rad_s": 14.531,
+    "speed_vs_servo": 3.092,
+    "stance_sole_z_min_mm": -0.0,
+    "stance_sole_z_max_mm": 1.36,
+    "min_foot_gap_m": 0.1399,
+    "peak_hip_roll_dev_rad": 0.3201,
+    "stance_sole_z_spread_mm": 1.36,
+    "pass": true,
+    "fast_for_servo": true
+   },
+   "index": 0,
+   "length": 200
+  },
+  {
+   "id": "side_step__dx0_dy0.03_dth0__gentle",
+   "category": "side_step",
+   "source": "side_step__dx0_dy0.03_dth0",
+   "split": "test",
+   "params": {
+    "dx": 0.0,
+    "dy": 0.03,
+    "dtheta": 0.0,
+    "style": "gentle",
+    "single_support_s": 0.4,
+    "foot_lift_m": 0.015,
+    "mean_vx": -0.0007,
+    "mean_vy": 0.0273,
+    "mean_yaw_rate": 0.0112
+   },
+   "check": {
+    "joint_limit_margin_rad": 0.0454,
+    "peak_joint_speed_rad_s": 13.962,
+    "speed_vs_servo": 2.971,
+    "stance_sole_z_min_mm": -0.0,
+    "stance_sole_z_max_mm": 1.41,
+    "min_foot_gap_m": 0.1401,
+    "peak_hip_roll_dev_rad": 0.3072,
+    "stance_sole_z_spread_mm": 1.41,
+    "pass": true,
+    "fast_for_servo": true
+   },
+   "index": 1,
+   "length": 200
+  },
+  {
+   "id": "turn_in_place__dx0_dy0_dth-0.15__gentle",
+   "category": "turn_in_place",
+   "source": "turn_in_place__dx0_dy0_dth-0.15",
+   "split": "val",
+   "params": {
+    "dx": 0.0,
+    "dy": 0.0,
+    "dtheta": -0.15,
+    "style": "gentle",
+    "single_support_s": 0.4,
+    "foot_lift_m": 0.015,
+    "mean_vx": 0.0025,
+    "mean_vy": -0.0177,
+    "mean_yaw_rate": -0.1647
+   },
+   "check": {
+    "joint_limit_margin_rad": 0.078,
+    "peak_joint_speed_rad_s": 8.614,
+    "speed_vs_servo": 1.833,
+    "stance_sole_z_min_mm": -0.0,
+    "stance_sole_z_max_mm": 0.0,
+    "min_foot_gap_m": 0.1639,
+    "peak_hip_roll_dev_rad": 0.2675,
+    "stance_sole_z_spread_mm": 0.0,
+    "pass": true,
+    "fast_for_servo": true
+   },
+   "index": 2,
+   "length": 200
+  },
+  {
+   "id": "turn_in_place__dx0_dy0_dth-0.15__normal",
+   "category": "turn_in_place",
+   "source": "turn_in_place__dx0_dy0_dth-0.15",
+   "split": "val",
+   "params": {
+    "dx": 0.0,
+    "dy": 0.0,
+    "dtheta": -0.15,
+    "style": "normal",
+    "single_support_s": 0.3,
+    "foot_lift_m": 0.025,
+    "mean_vx": 0.002,
+    "mean_vy": -0.018,
+    "mean_yaw_rate": -0.2411
+   },
+   "check": {
+    "joint_limit_margin_rad": 0.1875,
+    "peak_joint_speed_rad_s": 10.045,
+    "speed_vs_servo": 2.137,
+    "stance_sole_z_min_mm": -0.0,
+    "stance_sole_z_max_mm": 0.0,
+    "min_foot_gap_m": 0.164,
+    "peak_hip_roll_dev_rad": 0.2389,
+    "stance_sole_z_spread_mm": 0.0,
+    "pass": true,
+    "fast_for_servo": true
+   },
+   "index": 3,
+   "length": 200
+  },
+  {
+   "id": "turn_in_place__dx0_dy0_dth-0.30__gentle",
+   "category": "turn_in_place",
+   "source": "turn_in_place__dx0_dy0_dth-0.30",
+   "split": "test",
+   "params": {
+    "dx": 0.0,
+    "dy": 0.0,
+    "dtheta": -0.3,
+    "style": "gentle",
+    "single_support_s": 0.4,
+    "foot_lift_m": 0.015,
+    "mean_vx": 0.0044,
+    "mean_vy": -0.0251,
+    "mean_yaw_rate": -0.3406
+   },
+   "check": {
+    "joint_limit_margin_rad": 0.0479,
+    "peak_joint_speed_rad_s": 11.765,
+    "speed_vs_servo": 2.503,
+    "stance_sole_z_min_mm": -0.0,
+    "stance_sole_z_max_mm": 0.54,
+    "min_foot_gap_m": 0.1639,
+    "peak_hip_roll_dev_rad": 0.2945,
+    "stance_sole_z_spread_mm": 0.54,
+    "pass": true,
+    "fast_for_servo": true
+   },
+   "index": 4,
+   "length": 200
+  },
+  {
+   "id": "turn_in_place__dx0_dy0_dth-0.30__normal",
+   "category": "turn_in_place",
+   "source": "turn_in_place__dx0_dy0_dth-0.30",
+   "split": "test",
+   "params": {
+    "dx": 0.0,
+    "dy": 0.0,
+    "dtheta": -0.3,
+    "style": "normal",
+    "single_support_s": 0.3,
+    "foot_lift_m": 0.025,
+    "mean_vx": 0.004,
+    "mean_vy": -0.0288,
+    "mean_yaw_rate": -0.4985
+   },
+   "check": {
+    "joint_limit_margin_rad": 0.1898,
+    "peak_joint_speed_rad_s": 16.25,
+    "speed_vs_servo": 3.457,
+    "stance_sole_z_min_mm": -0.0,
+    "stance_sole_z_max_mm": 0.87,
+    "min_foot_gap_m": 0.164,
+    "peak_hip_roll_dev_rad": 0.2681,
+    "stance_sole_z_spread_mm": 0.87,
+    "pass": true,
+    "fast_for_servo": true
+   },
+   "index": 5,
+   "length": 200
+  },
+  {
+   "id": "turn_in_place__dx0_dy0_dth0.15__gentle",
+   "category": "turn_in_place",
+   "source": "turn_in_place__dx0_dy0_dth0.15",
+   "split": "train",
+   "params": {
+    "dx": 0.0,
+    "dy": 0.0,
+    "dtheta": 0.15,
+    "style": "gentle",
+    "single_support_s": 0.4,
+    "foot_lift_m": 0.015,
+    "mean_vx": -0.0029,
+    "mean_vy": -0.0055,
+    "mean_yaw_rate": 0.1871
+   },
+   "check": {
+    "joint_limit_margin_rad": 0.1376,
+    "peak_joint_speed_rad_s": 6.898,
+    "speed_vs_servo": 1.468,
+    "stance_sole_z_min_mm": -0.0,
+    "stance_sole_z_max_mm": 0.0,
+    "min_foot_gap_m": 0.1639,
+    "peak_hip_roll_dev_rad": 0.2753,
+    "stance_sole_z_spread_mm": 0.0,
+    "pass": true,
+    "fast_for_servo": true
+   },
+   "index": 6,
+   "length": 200
+  },
+  {
+   "id": "turn_in_place__dx0_dy0_dth0.15__normal",
+   "category": "turn_in_place",
+   "source": "turn_in_place__dx0_dy0_dth0.15",
+   "split": "train",
+   "params": {
+    "dx": 0.0,
+    "dy": 0.0,
+    "dtheta": 0.15,
+    "style": "normal",
+    "single_support_s": 0.3,
+    "foot_lift_m": 0.025,
+    "mean_vx": -0.002,
+    "mean_vy": 0.0006,
+    "mean_yaw_rate": 0.2738
+   },
+   "check": {
+    "joint_limit_margin_rad": 0.1741,
+    "peak_joint_speed_rad_s": 9.315,
+    "speed_vs_servo": 1.982,
+    "stance_sole_z_min_mm": -0.0,
+    "stance_sole_z_max_mm": 0.0,
+    "min_foot_gap_m": 0.164,
+    "peak_hip_roll_dev_rad": 0.2472,
+    "stance_sole_z_spread_mm": 0.0,
+    "pass": true,
+    "fast_for_servo": true
+   },
+   "index": 7,
+   "length": 200
+  },
+  {
+   "id": "turn_in_place__dx0_dy0_dth0.30__gentle",
+   "category": "turn_in_place",
+   "source": "turn_in_place__dx0_dy0_dth0.30",
+   "split": "train",
+   "params": {
+    "dx": 0.0,
+    "dy": 0.0,
+    "dtheta": 0.3,
+    "style": "gentle",
+    "single_support_s": 0.4,
+    "foot_lift_m": 0.015,
+    "mean_vx": -0.0064,
+    "mean_vy": -0.0015,
+    "mean_yaw_rate": 0.363
+   },
+   "check": {
+    "joint_limit_margin_rad": 0.06,
+    "peak_joint_speed_rad_s": 11.685,
+    "speed_vs_servo": 2.486,
+    "stance_sole_z_min_mm": -0.0,
+    "stance_sole_z_max_mm": 0.4,
+    "min_foot_gap_m": 0.1639,
+    "peak_hip_roll_dev_rad": 0.301,
+    "stance_sole_z_spread_mm": 0.4,
+    "pass": true,
+    "fast_for_servo": true
+   },
+   "index": 8,
+   "length": 200
+  },
+  {
+   "id": "walk_back__dx-0.02_dy0_dth0__gentle",
+   "category": "walk_back",
+   "source": "walk_back__dx-0.02_dy0_dth0",
+   "split": "test",
+   "params": {
+    "dx": -0.02,
+    "dy": 0.0,
+    "dtheta": 0.0,
+    "style": "gentle",
+    "single_support_s": 0.4,
+    "foot_lift_m": 0.015,
+    "mean_vx": -0.025,
+    "mean_vy": -0.01,
+    "mean_yaw_rate": 0.0112
+   },
+   "check": {
+    "joint_limit_margin_rad": 0.1399,
+    "peak_joint_speed_rad_s": 4.739,
+    "speed_vs_servo": 1.008,
+    "stance_sole_z_min_mm": -0.0,
+    "stance_sole_z_max_mm": 0.0,
+    "min_foot_gap_m": 0.1638,
+    "peak_hip_roll_dev_rad": 0.239,
+    "stance_sole_z_spread_mm": 0.0,
+    "pass": true,
+    "fast_for_servo": true
+   },
+   "index": 9,
+   "length": 200
+  },
+  {
+   "id": "walk_back__dx-0.02_dy0_dth0__normal",
+   "category": "walk_back",
+   "source": "walk_back__dx-0.02_dy0_dth0",
+   "split": "test",
+   "params": {
+    "dx": -0.02,
+    "dy": 0.0,
+    "dtheta": 0.0,
+    "style": "normal",
+    "single_support_s": 0.3,
+    "foot_lift_m": 0.025,
+    "mean_vx": -0.0351,
+    "mean_vy": -0.0072,
+    "mean_yaw_rate": 0.0164
+   },
+   "check": {
+    "joint_limit_margin_rad": 0.175,
+    "peak_joint_speed_rad_s": 9.007,
+    "speed_vs_servo": 1.916,
+    "stance_sole_z_min_mm": -0.0,
+    "stance_sole_z_max_mm": 0.0,
+    "min_foot_gap_m": 0.1637,
+    "peak_hip_roll_dev_rad": 0.2117,
+    "stance_sole_z_spread_mm": 0.0,
+    "pass": true,
+    "fast_for_servo": true
+   },
+   "index": 10,
+   "length": 200
+  },
+  {
+   "id": "walk_back__dx-0.04_dy0_dth0__gentle",
+   "category": "walk_back",
+   "source": "walk_back__dx-0.04_dy0_dth0",
+   "split": "train",
+   "params": {
+    "dx": -0.04,
+    "dy": 0.0,
+    "dtheta": 0.0,
+    "style": "gentle",
+    "single_support_s": 0.4,
+    "foot_lift_m": 0.015,
+    "mean_vx": -0.0374,
+    "mean_vy": -0.0101,
+    "mean_yaw_rate": 0.0084
+   },
+   "check": {
+    "joint_limit_margin_rad": 0.1399,
+    "peak_joint_speed_rad_s": 5.958,
+    "speed_vs_servo": 1.268,
+    "stance_sole_z_min_mm": -0.0,
+    "stance_sole_z_max_mm": 0.0,
+    "min_foot_gap_m": 0.1638,
+    "peak_hip_roll_dev_rad": 0.2383,
+    "stance_sole_z_spread_mm": 0.0,
+    "pass": true,
+    "fast_for_servo": true
+   },
+   "index": 11,
+   "length": 200
+  },
+  {
+   "id": "walk_back__dx-0.04_dy0_dth0__normal",
+   "category": "walk_back",
+   "source": "walk_back__dx-0.04_dy0_dth0",
+   "split": "train",
+   "params": {
+    "dx": -0.04,
+    "dy": 0.0,
+    "dtheta": 0.0,
+    "style": "normal",
+    "single_support_s": 0.3,
+    "foot_lift_m": 0.025,
+    "mean_vx": -0.0527,
+    "mean_vy": -0.0073,
+    "mean_yaw_rate": 0.0123
+   },
+   "check": {
+    "joint_limit_margin_rad": 0.175,
+    "peak_joint_speed_rad_s": 9.956,
+    "speed_vs_servo": 2.118,
+    "stance_sole_z_min_mm": -0.0,
+    "stance_sole_z_max_mm": 0.0,
+    "min_foot_gap_m": 0.1638,
+    "peak_hip_roll_dev_rad": 0.211,
+    "stance_sole_z_spread_mm": 0.0,
+    "pass": true,
+    "fast_for_servo": true
+   },
+   "index": 12,
+   "length": 200
+  },
+  {
+   "id": "walk_fwd__dx0.02_dy0_dth0__gentle",
+   "category": "walk_fwd",
+   "source": "walk_fwd__dx0.02_dy0_dth0",
+   "split": "test",
+   "params": {
+    "dx": 0.02,
+    "dy": 0.0,
+    "dtheta": 0.0,
+    "style": "gentle",
+    "single_support_s": 0.4,
+    "foot_lift_m": 0.015,
+    "mean_vx": 0.0248,
+    "mean_vy": -0.0102,
+    "mean_yaw_rate": 0.0112
+   },
+   "check": {
+    "joint_limit_margin_rad": 0.1399,
+    "peak_joint_speed_rad_s": 4.728,
+    "speed_vs_servo": 1.006,
+    "stance_sole_z_min_mm": -0.0,
+    "stance_sole_z_max_mm": 0.0,
+    "min_foot_gap_m": 0.1638,
+    "peak_hip_roll_dev_rad": 0.24,
+    "stance_sole_z_spread_mm": 0.0,
+    "pass": true,
+    "fast_for_servo": true
+   },
+   "index": 13,
+   "length": 200
+  },
+  {
+   "id": "walk_fwd__dx0.02_dy0_dth0__normal",
+   "category": "walk_fwd",
+   "source": "walk_fwd__dx0.02_dy0_dth0",
+   "split": "test",
+   "params": {
+    "dx": 0.02,
+    "dy": 0.0,
+    "dtheta": 0.0,
+    "style": "normal",
+    "single_support_s": 0.3,
+    "foot_lift_m": 0.025,
+    "mean_vx": 0.0353,
+    "mean_vy": -0.0074,
+    "mean_yaw_rate": 0.0164
+   },
+   "check": {
+    "joint_limit_margin_rad": 0.1751,
+    "peak_joint_speed_rad_s": 8.992,
+    "speed_vs_servo": 1.913,
+    "stance_sole_z_min_mm": -0.0,
+    "stance_sole_z_max_mm": 0.0,
+    "min_foot_gap_m": 0.1637,
+    "peak_hip_roll_dev_rad": 0.2127,
+    "stance_sole_z_spread_mm": 0.0,
+    "pass": true,
+    "fast_for_servo": true
+   },
+   "index": 14,
+   "length": 200
+  },
+  {
+   "id": "walk_fwd__dx0.04_dy0_dth0__gentle",
+   "category": "walk_fwd",
+   "source": "walk_fwd__dx0.04_dy0_dth0",
+   "split": "train",
+   "params": {
+    "dx": 0.04,
+    "dy": 0.0,
+    "dtheta": 0.0,
+    "style": "gentle",
+    "single_support_s": 0.4,
+    "foot_lift_m": 0.015,
+    "mean_vx": 0.049,
+    "mean_vy": -0.0103,
+    "mean_yaw_rate": 0.0112
+   },
+   "check": {
+    "joint_limit_margin_rad": 0.0493,
+    "peak_joint_speed_rad_s": 11.048,
+    "speed_vs_servo": 2.351,
+    "stance_sole_z_min_mm": -0.0,
+    "stance_sole_z_max_mm": 0.0,
+    "min_foot_gap_m": 0.1637,
+    "peak_hip_roll_dev_rad": 0.2405,
+    "stance_sole_z_spread_mm": 0.0,
+    "pass": true,
+    "fast_for_servo": true
+   },
+   "index": 15,
+   "length": 200
+  },
+  {
+   "id": "walk_fwd__dx0.04_dy0_dth0__normal",
+   "category": "walk_fwd",
+   "source": "walk_fwd__dx0.04_dy0_dth0",
+   "split": "train",
+   "params": {
+    "dx": 0.04,
+    "dy": 0.0,
+    "dtheta": 0.0,
+    "style": "normal",
+    "single_support_s": 0.3,
+    "foot_lift_m": 0.025,
+    "mean_vx": 0.0705,
+    "mean_vy": -0.0075,
+    "mean_yaw_rate": 0.0164
+   },
+   "check": {
+    "joint_limit_margin_rad": 0.1752,
+    "peak_joint_speed_rad_s": 15.135,
+    "speed_vs_servo": 3.22,
+    "stance_sole_z_min_mm": -0.0,
+    "stance_sole_z_max_mm": 0.0,
+    "min_foot_gap_m": 0.1636,
+    "peak_hip_roll_dev_rad": 0.2132,
+    "stance_sole_z_spread_mm": 0.0,
+    "pass": true,
+    "fast_for_servo": true
+   },
+   "index": 16,
+   "length": 200
+  },
+  {
+   "id": "walk_turn__dx0.04_dy0_dth-0.15__gentle",
+   "category": "walk_turn",
+   "source": "walk_turn__dx0.04_dy0_dth-0.15",
+   "split": "test",
+   "params": {
+    "dx": 0.04,
+    "dy": 0.0,
+    "dtheta": -0.15,
+    "style": "gentle",
+    "single_support_s": 0.4,
+    "foot_lift_m": 0.015,
+    "mean_vx": 0.0514,
+    "mean_vy": -0.015,
+    "mean_yaw_rate": -0.1647
+   },
+   "check": {
+    "joint_limit_margin_rad": 0.0144,
+    "peak_joint_speed_rad_s": 13.502,
+    "speed_vs_servo": 2.873,
+    "stance_sole_z_min_mm": -0.0,
+    "stance_sole_z_max_mm": 0.93,
+    "min_foot_gap_m": 0.1639,
+    "peak_hip_roll_dev_rad": 0.2812,
+    "stance_sole_z_spread_mm": 0.93,
+    "pass": true,
+    "fast_for_servo": true
+   },
+   "index": 17,
+   "length": 200
+  },
+  {
+   "id": "walk_turn__dx0.04_dy0_dth-0.15__normal",
+   "category": "walk_turn",
+   "source": "walk_turn__dx0.04_dy0_dth-0.15",
+   "split": "test",
+   "params": {
+    "dx": 0.04,
+    "dy": 0.0,
+    "dtheta": -0.15,
+    "style": "normal",
+    "single_support_s": 0.3,
+    "foot_lift_m": 0.025,
+    "mean_vx": 0.0713,
+    "mean_vy": -0.0145,
+    "mean_yaw_rate": -0.2411
+   },
+   "check": {
+    "joint_limit_margin_rad": 0.005,
+    "peak_joint_speed_rad_s": 18.052,
+    "speed_vs_servo": 3.841,
+    "stance_sole_z_min_mm": -0.0,
+    "stance_sole_z_max_mm": 1.42,
+    "min_foot_gap_m": 0.164,
+    "peak_hip_roll_dev_rad": 0.2374,
+    "stance_sole_z_spread_mm": 1.42,
+    "pass": true,
+    "fast_for_servo": true
+   },
+   "index": 18,
+   "length": 200
+  },
+  {
+   "id": "walk_turn__dx0.04_dy0_dth0.15__gentle",
+   "category": "walk_turn",
+   "source": "walk_turn__dx0.04_dy0_dth0.15",
+   "split": "train",
+   "params": {
+    "dx": 0.04,
+    "dy": 0.0,
+    "dtheta": 0.15,
+    "style": "gentle",
+    "single_support_s": 0.4,
+    "foot_lift_m": 0.015,
+    "mean_vx": 0.0468,
+    "mean_vy": -0.0087,
+    "mean_yaw_rate": 0.1871
+   },
+   "check": {
+    "joint_limit_margin_rad": 0.0278,
+    "peak_joint_speed_rad_s": 13.197,
+    "speed_vs_servo": 2.808,
+    "stance_sole_z_min_mm": -0.0,
+    "stance_sole_z_max_mm": 1.08,
+    "min_foot_gap_m": 0.1639,
+    "peak_hip_roll_dev_rad": 0.2908,
+    "stance_sole_z_spread_mm": 1.08,
+    "pass": true,
+    "fast_for_servo": true
+   },
+   "index": 19,
+   "length": 200
+  },
+  {
+   "id": "crouch__depth0.25__fast",
+   "category": "crouch",
+   "source": "crouch__depth0.25",
+   "split": "val",
+   "params": {
+    "depth_m": 0.002,
+    "depth_frac": 0.25,
+    "move_s": 0.8,
+    "hold_s": 1.0
+   },
+   "check": {
+    "joint_limit_margin_rad": 0.1524,
+    "peak_joint_speed_rad_s": 0.094,
+    "speed_vs_servo": 0.02,
+    "stance_sole_z_min_mm": -0.01,
+    "stance_sole_z_max_mm": 0.14,
+    "min_foot_gap_m": 0.1666,
+    "peak_hip_roll_dev_rad": 0.0,
+    "stance_sole_z_spread_mm": 0.07,
+    "pass": true,
+    "fast_for_servo": false
+   },
+   "index": 20,
+   "length": 200
+  },
+  {
+   "id": "crouch__depth0.25__slow",
+   "category": "crouch",
+   "source": "crouch__depth0.25",
+   "split": "val",
+   "params": {
+    "depth_m": 0.002,
+    "depth_frac": 0.25,
+    "move_s": 1.5,
+    "hold_s": 0.5
+   },
+   "check": {
+    "joint_limit_margin_rad": 0.1524,
+    "peak_joint_speed_rad_s": 0.05,
+    "speed_vs_servo": 0.011,
+    "stance_sole_z_min_mm": -0.01,
+    "stance_sole_z_max_mm": 0.14,
+    "min_foot_gap_m": 0.1666,
+    "peak_hip_roll_dev_rad": 0.0,
+    "stance_sole_z_spread_mm": 0.07,
+    "pass": true,
+    "fast_for_servo": false
+   },
+   "index": 21,
+   "length": 200
+  },
+  {
+   "id": "crouch__depth0.50__fast",
+   "category": "crouch",
+   "source": "crouch__depth0.50",
+   "split": "train",
+   "params": {
+    "depth_m": 0.004,
+    "depth_frac": 0.5,
+    "move_s": 0.8,
+    "hold_s": 1.0
+   },
+   "check": {
+    "joint_limit_margin_rad": 0.114,
+    "peak_joint_speed_rad_s": 0.186,
+    "speed_vs_servo": 0.04,
+    "stance_sole_z_min_mm": -0.02,
+    "stance_sole_z_max_mm": 0.14,
+    "min_foot_gap_m": 0.1666,
+    "peak_hip_roll_dev_rad": 0.0,
+    "stance_sole_z_spread_mm": 0.08,
+    "pass": true,
+    "fast_for_servo": false
+   },
+   "index": 22,
+   "length": 200
+  },
+  {
+   "id": "crouch__depth0.50__slow",
+   "category": "crouch",
+   "source": "crouch__depth0.50",
+   "split": "train",
+   "params": {
+    "depth_m": 0.004,
+    "depth_frac": 0.5,
+    "move_s": 1.5,
+    "hold_s": 0.5
+   },
+   "check": {
+    "joint_limit_margin_rad": 0.114,
+    "peak_joint_speed_rad_s": 0.098,
+    "speed_vs_servo": 0.021,
+    "stance_sole_z_min_mm": -0.02,
+    "stance_sole_z_max_mm": 0.14,
+    "min_foot_gap_m": 0.1666,
+    "peak_hip_roll_dev_rad": 0.0,
+    "stance_sole_z_spread_mm": 0.08,
+    "pass": true,
+    "fast_for_servo": false
+   },
+   "index": 23,
+   "length": 200
+  },
+  {
+   "id": "crouch__depth0.75__fast",
+   "category": "crouch",
+   "source": "crouch__depth0.75",
+   "split": "test",
+   "params": {
+    "depth_m": 0.006,
+    "depth_frac": 0.75,
+    "move_s": 0.8,
+    "hold_s": 1.0
+   },
+   "check": {
+    "joint_limit_margin_rad": 0.0763,
+    "peak_joint_speed_rad_s": 0.272,
+    "speed_vs_servo": 0.058,
+    "stance_sole_z_min_mm": -0.03,
+    "stance_sole_z_max_mm": 0.14,
+    "min_foot_gap_m": 0.1666,
+    "peak_hip_roll_dev_rad": 0.0,
+    "stance_sole_z_spread_mm": 0.09,
+    "pass": true,
+    "fast_for_servo": false
+   },
+   "index": 24,
+   "length": 200
+  },
+  {
+   "id": "crouch__depth0.75__slow",
+   "category": "crouch",
+   "source": "crouch__depth0.75",
+   "split": "test",
+   "params": {
+    "depth_m": 0.006,
+    "depth_frac": 0.75,
+    "move_s": 1.5,
+    "hold_s": 0.5
+   },
+   "check": {
+    "joint_limit_margin_rad": 0.0763,
+    "peak_joint_speed_rad_s": 0.146,
+    "speed_vs_servo": 0.031,
+    "stance_sole_z_min_mm": -0.03,
+    "stance_sole_z_max_mm": 0.14,
+    "min_foot_gap_m": 0.1666,
+    "peak_hip_roll_dev_rad": 0.0,
+    "stance_sole_z_spread_mm": 0.09,
+    "pass": true,
+    "fast_for_servo": false
+   },
+   "index": 25,
+   "length": 200
+  },
+  {
+   "id": "crouch__depth1.00__fast",
+   "category": "crouch",
+   "source": "crouch__depth1.00",
+   "split": "train",
+   "params": {
+    "depth_m": 0.008,
+    "depth_frac": 1.0,
+    "move_s": 0.8,
+    "hold_s": 1.0
+   },
+   "check": {
+    "joint_limit_margin_rad": 0.0394,
+    "peak_joint_speed_rad_s": 0.361,
+    "speed_vs_servo": 0.077,
+    "stance_sole_z_min_mm": -0.03,
+    "stance_sole_z_max_mm": 0.14,
+    "min_foot_gap_m": 0.1666,
+    "peak_hip_roll_dev_rad": 0.0,
+    "stance_sole_z_spread_mm": 0.09,
+    "pass": true,
+    "fast_for_servo": false
+   },
+   "index": 26,
+   "length": 200
+  },
+  {
+   "id": "crouch__depth1.00__slow",
+   "category": "crouch",
+   "source": "crouch__depth1.00",
+   "split": "train",
+   "params": {
+    "depth_m": 0.008,
+    "depth_frac": 1.0,
+    "move_s": 1.5,
+    "hold_s": 0.5
+   },
+   "check": {
+    "joint_limit_margin_rad": 0.0394,
+    "peak_joint_speed_rad_s": 0.193,
+    "speed_vs_servo": 0.041,
+    "stance_sole_z_min_mm": -0.03,
+    "stance_sole_z_max_mm": 0.14,
+    "min_foot_gap_m": 0.1666,
+    "peak_hip_roll_dev_rad": 0.0,
+    "stance_sole_z_spread_mm": 0.09,
+    "pass": true,
+    "fast_for_servo": false
+   },
+   "index": 27,
+   "length": 200
+  }
+ ],
+ "dropped_by_checks": [
+  "side_step__dx0_dy-0.03_dth0__normal",
+  "side_step__dx0_dy0.03_dth0__normal",
+  "turn_in_place__dx0_dy0_dth0.30__normal",
+  "walk_fwd__dx0.06_dy0_dth0__gentle",
+  "walk_fwd__dx0.06_dy0_dth0__normal",
+  "walk_turn__dx0.04_dy0_dth0.15__normal"
+ ]
+}

@@ -1,0 +1,19 @@
+{
+ "side_step__dx0_dy-0.03_dth0": "train",
+ "side_step__dx0_dy0.03_dth0": "test",
+ "turn_in_place__dx0_dy0_dth-0.15": "val",
+ "turn_in_place__dx0_dy0_dth-0.30": "test",
+ "turn_in_place__dx0_dy0_dth0.15": "train",
+ "turn_in_place__dx0_dy0_dth0.30": "train",
+ "walk_back__dx-0.02_dy0_dth0": "test",
+ "walk_back__dx-0.04_dy0_dth0": "train",
+ "walk_fwd__dx0.02_dy0_dth0": "test",
+ "walk_fwd__dx0.04_dy0_dth0": "train",
+ "walk_fwd__dx0.06_dy0_dth0": "val",
+ "walk_turn__dx0.04_dy0_dth-0.15": "test",
+ "walk_turn__dx0.04_dy0_dth0.15": "train",
+ "crouch__depth0.25": "val",
+ "crouch__depth0.50": "train",
+ "crouch__depth0.75": "test",
+ "crouch__depth1.00": "train"
+}
