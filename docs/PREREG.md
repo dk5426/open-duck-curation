@@ -32,6 +32,10 @@ members sign off below. After sign-off, this file changes only through a dated a
    clips (`OVERNIGHT_LOG.md` 01:40).
 4. **Proposed: reference feed-forward actions** (joint target = reference + 0.25 × action). With home-based actions
    the policy learned to stand (leg error 0.27 rad at 50M vs 0.058 with feed-forward).
+5. **Proposed: a tighter τ tie band.** In the dry run all four candidates scored within 0.044 on validation, inside
+   the 0.05 band, so the rule picked the largest subset without choosing (`results/dry_run/tau_choice.json`). Options:
+   band 0.02, or score each τ fine-tune with 30 validation rollouts instead of 10 and use a paired bootstrap over
+   clips.
 
 **Still open for the team:** keep the stationary categories in the study, or report them separately? Their score
 (P.2) is dominated by small errors and they will rank as the "easiest" clips whatever the policy does.
@@ -75,8 +79,9 @@ not separate clips; adjust τ once, before sign-off.
 
 ## P.5 Random control
 
-- Clips drawn uniformly from the training pool until the total duration matches the curated set's within 10%. All
-  clips are 4 s, so that means the same number of clips.
+- Clips drawn uniformly from the training pool, stopping at the total duration closest to the curated set's. All
+  clips are 4 s, so that means the same number of clips. (The first implementation stopped at 90% and gave random
+  about 10% less data; fixed before sign-off.)
 - **One fresh draw per seed** (3 draws, seeds 0/1/2), recorded here before training.
 
 ## P.6 Training (every final policy)

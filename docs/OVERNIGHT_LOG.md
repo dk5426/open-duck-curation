@@ -119,3 +119,7 @@ Timestamped journal of the overnight work (GPUs 1 and 2 only; GPU 3 stays free).
   full (+0.21) as on the two it cut (+0.18), and its training episode length lagged from the start (97 vs 145–149 at
   50M, 129 vs 148–154 at 100M). This reads as a slow run (seed), not a curation effect. The alternative, that hard
   clips teach balance recovery that transfers, cannot be separated without seeds. Write-up: `OVERNIGHT_REPORT.md`.
+- **05:10** Morning deliverables: `docs/OVERNIGHT_REPORT.md` (each result with numbers, files, commit, reproduce
+  command; failures; open decisions; commits) and a private gallery page with every video inline. PREREG: proposal 5
+  (tighter τ tie band); P.5 text matches the fixed duration matching. GPUs 1 and 2 are idle; no further runs were
+  started (one seed per condition as decided; a second seed of curated and full is listed as an option for the team).
