@@ -74,3 +74,19 @@ Timestamped journal of the overnight work (GPUs 1 and 2 only; GPU 3 stays free).
   until the train sources move every joint the category moves. v5 head: look-around + tilt train, nod val, shake test.
   The dry run stays on v4: the failure hits every condition equally on the same val/test clips (noise, not bias), and
   restarting would cost 30 min. Head clips are reported separately in the dry-run results.
+- **02:09** Feed-forward scoring policy `dry_score_ff_100M` and full condition `dry_full_ff_100M` finished (≈130M
+  steps/h, faster than the 94M/h first estimate).
+- **02:15** Train + val scored (10 rollouts, on GPU: 2 min for 37 clips). `results/dry_run/scores_train.json`:
+  scores 0.41–1.74; now they separate clips **within** gait categories too (e.g. walk_fwd 0.04–0.05 m/s gentle falls
+  3–4/10, walk_turn 0.04 m/s 0.15 rad/s gentle 8/10). Stationary clips are the easiest (0.41–0.69). Val head
+  look-around falls 10/10 (zero-variance head_pitch, see 01:40).
+- **02:16** τ candidates (`results/dry_run/subsets/`): p40 0.61 → 21 clips, p55 1.10 → 23, p70 1.23 → 27, p85 1.38 →
+  32 (each includes the per-category coverage clips). Fine-tunes p40 / p55 started (GPU 1 / 2, 50M, warm start from
+  the scoring policy); p70 / p85 follow. First launch failed in seconds: `CURATION_CLIPS` is a file path (runbook fixed).
+- **02:45** τ fine-tunes p40 / p55 done and scored on val (`results/dry_run/scores_val_p40.json`, `_p55.json`); p70 / p85
+  running. A driver (`after_tau.sh` on the cluster, steps in `DRY_RUN.md`) picks τ* by the P.4 rule, builds the
+  matched random (seed 0) and kinematic subsets, and launches curated, random and kinematic at 100M from scratch.
+- **02:55** `eval_clips.py` gained `--push` (lateral kick at t = 1.5 s, alternating ±y) and `--friction` (P.7). Smoke
+  test: walk_fwd completion 1.00 → 0.75 (0.6 m/s) → 0.44 (1.5 m/s). New `curation/analysis/compare_conditions.py`
+  (P.7–P.9: per condition, paired Δe with bootstrap CI, per category, pass bar). Full condition test-scored:
+  `results/dry_run/test/full_{nominal,push03,push06,fric06}.json`.

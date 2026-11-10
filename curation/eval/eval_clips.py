@@ -34,6 +34,7 @@ from orbax import checkpoint as ocp  # noqa: E402
 from playground.open_duck_mini_v2 import tracking  # noqa: E402
 
 TAU_DOF, TAU_KEY, E_FAIL = 0.10, 0.02, 3.0
+PUSH_T = 1.5  # s, P.7
 
 
 def clip_ids(man, which):
@@ -70,8 +71,12 @@ def load_policy(ckpt, env):
     return make((norm, params[1]), deterministic=True)
 
 
-def evaluate(ckpt, ids, rollouts, seed=0):
+def evaluate(ckpt, ids, rollouts, seed=0, push=0.0, friction=1.0):
+    """push: lateral base-velocity kick (m/s) at t = PUSH_T, +y on even rollouts and -y on odd ones (P.7);
+    friction: scale on every geom's friction."""
     env = tracking.Tracking(clip_ids=ids)
+    if friction != 1.0:
+        env._mjx_model = env._mjx_model.replace(geom_friction=env._mjx_model.geom_friction.at[:, 0].multiply(friction))
     policy = load_policy(ckpt, env)
     n = len(ids)
     clips = jp.repeat(jp.arange(n), rollouts)
@@ -83,8 +88,13 @@ def evaluate(ckpt, ids, rollouts, seed=0):
     fmax = jp.array(m.actuator_forcerange[:, 1])
     lo, hi = env._ctrl_lo, env._ctrl_hi
 
-    def one_step(carry, _):
+    kick = jp.where(jp.arange(n * rollouts) % 2 == 0, push, -push)
+    k_push = int(round(PUSH_T / env.dt))
+
+    def one_step(carry, t):
         st, alive, key = carry
+        qvel = st.data.qvel.at[:, 1].add(jp.where(t == k_push, kick, 0.0))
+        st = st.replace(data=st.data.replace(qvel=qvel))
         key, kp = jax.random.split(key)
         act, _ = jax.vmap(policy)(st.obs, jax.random.split(kp, st.obs["state"].shape[0]))
         nst = jax.vmap(env.step)(st, act)
@@ -98,8 +108,7 @@ def evaluate(ckpt, ids, rollouts, seed=0):
         return (nst, alive, key), rec
 
     st = reset(keys, clips)
-    run = jax.jit(lambda st: jax.lax.scan(one_step, (st, jp.ones(n * rollouts), jax.random.PRNGKey(seed + 1)), None,
-                                          length=T - 1)[1])
+    run = jax.jit(lambda st: jax.lax.scan(one_step, (st, jp.ones(n * rollouts), jax.random.PRNGKey(seed + 1)), jp.arange(T - 1))[1])
     rec = jax.tree_util.tree_map(np.asarray, run(st))  # (T-1, n*R)
     L = np.asarray(env._ref_len)[np.asarray(clips)] - 1
     out = {}
@@ -133,18 +142,20 @@ def main():
     p.add_argument("--clips", default="all")
     p.add_argument("--rollouts", type=int, default=10)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--push", type=float, default=0.0, help="lateral kick (m/s) at t = 1.5 s (P.7)")
+    p.add_argument("--friction", type=float, default=1.0, help="friction scale (P.7: 0.6)")
     p.add_argument("--out", required=True)
     a = p.parse_args()
     _, man = tracking.load_library()
     ids = clip_ids(man, a.clips)
-    res = evaluate(a.ckpt, ids, a.rollouts, a.seed)
+    res = evaluate(a.ckpt, ids, a.rollouts, a.seed, a.push, a.friction)
     cat = {c["id"]: (c["category"], c["split"]) for c in man["clips"]}
     print(f"{'clip':52s} {'split':5s} {'compl':>6s} {'falls':>5s} {'legs':>6s} {'kp cm':>6s} {'vel':>6s} {'yaw':>6s} {'score':>6s}")
     for cid, r in sorted(res.items(), key=lambda kv: kv[1]["score"]):
         print(f"{cid[:52]:52s} {cat[cid][1]:5s} {r['completion']:6.2f} {r['falls']:3d}/{r['rollouts']:<2d} {r['legs_rms']:6.3f} "
               f"{100 * r['keypoints']:6.2f} {r['lin_vel']:6.3f} {r['yaw_rate']:6.3f} {r['score']:6.2f}")
     json.dump({"ckpt": "/".join(os.path.abspath(a.ckpt).split("/")[-2:]), "tau_dof": TAU_DOF, "tau_key": TAU_KEY, "e_fail": E_FAIL,
-               "rollouts": a.rollouts, "clips": res}, open(a.out, "w"), indent=1)
+               "rollouts": a.rollouts, "push_m_s": a.push, "friction_scale": a.friction, "clips": res}, open(a.out, "w"), indent=1)
     print("wrote", a.out)
 
 

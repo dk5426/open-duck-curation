@@ -22,7 +22,7 @@ budgets are halved.
    (and `--clips val`).
 3. Subsets: `python curation/select/select_subsets.py --scores scores_train.json --manifest data/clips_v4/manifest.json --out subsets/`.
 4. τ fine-tunes: for each `curated_pXX.json`,
-   `CURATION_CLIPS="$(cat curated_pXX.json)" tools/launch_train.sh <gpu> dry_tau_pXX 50000000 --env tracking --restore_checkpoint_path <scoring ckpt>`,
+   `CURATION_CLIPS=<path to curated_pXX.json> tools/launch_train.sh <gpu> dry_tau_pXX 50000000 --env tracking --restore_checkpoint_path <scoring ckpt>`,
    then score the val clips; τ* = lowest mean val score.
 5. Random and kinematic subsets matched to `curated_<τ*>.json` (`--match`, seed 0).
 6. Final runs, 100M, from scratch: full (`dry_full_ff_100M`), curated, random, kinematic.
