@@ -22,7 +22,7 @@ PPO).
 | [`docs/TRACKER.md`](docs/TRACKER.md) | Snapshot of the task tracker. The live tracker is a shared web page; ask Dhawal for access |
 | [`docs/AUDIT.md`](docs/AUDIT.md) | What already exists for each project step, what is partial, what is missing; compute budget; literature |
 | [`docs/SETUP.md`](docs/SETUP.md) | How the upstream pipeline was reproduced, the upstream bugs found, training cost, walker results |
-| [`docs/DATASET.md`](docs/DATASET.md) | Reference-clip dataset v1 (28 clips: gaits and crouches), how it is made, checks, splits; GIFs in `results/clips_v1/` |
+| [`docs/DATASET.md`](docs/DATASET.md) | Reference-clip dataset v4 (74 clips, 10 categories: 6 gaits, crouch, bow, sway, head), how it is made, checks, splits; GIFs in `results/clips_v4/` (v1 kept for history) |
 | [`docs/ROBOT_TESTS.md`](docs/ROBOT_TESTS.md) | Every test that needs the robot, in the order to run them |
 | [`docs/PREREG.md`](docs/PREREG.md) | Pre-registration DRAFT: clip splits, score, selection rule, threshold choice, random control, statistics, pass bar. Needs the team's sign-off before Step 4 |
 
@@ -31,7 +31,7 @@ PPO).
 | Folder | Contents |
 |---|---|
 | `docs/` | Plan, tracker snapshot, audit, setup notes |
-| `patches/open_duck_playground/` | Our changes to Open Duck Playground as a patch series (10 commits on top of upstream `b9be205`): pinned dependencies, get-up and jump tasks, floor-surface randomization, walker v2, name-based randomization ids, and the **reference-clip tracking environment** (`tracking.py`) |
+| `patches/open_duck_playground/` | Our changes to Open Duck Playground as a patch series (11 commits on top of upstream `b9be205`): pinned dependencies, get-up and jump tasks, floor-surface randomization, walker v2, name-based randomization ids, and the **reference-clip tracking environment** (`tracking.py`; 0011 adds motion-relative tolerances and the 1.66 rad knee) |
 | `patches/reference_motion_generator/` | Dependency pin for the reference-motion generator (on top of upstream `3d7bc6f`) |
 | `patches/locks/` | `uv.lock` files that resolve the exact versions we trained with |
 | `tools/` | Evaluation and analysis scripts: walker evaluation and tracking score, robot-log vs sim comparison, IMU plots, servo response, get-up evaluation and replay, start-pose banks, GPU-safe launch and queue scripts |
@@ -39,7 +39,7 @@ PPO).
 | `robot_logs/` | Real-robot recordings (50 Hz: observation, action, targets, joint positions, raw IMU, commands, loop timing), 2026-10-30 to 2026-11-02 |
 | `robot_patches/` | Changes installed on the robot's runtime, each as a diff with its README and off-robot tests |
 | `curation/` | Project code: clip generation and checks (`clips/`), reward ledger (`env/`), per-clip evaluator and rollout GIFs (`eval/`), subset selection (`select/`), robot test scripts (`robot/`), log analyses (`analysis/`) |
-| `data/clips_v1/` | The clip library (`library.npz`, `manifest.json`, `splits.json`) and the gait generator presets |
+| `data/clips_v4/` (current), `data/clips_v1/` | The clip library (`library.npz`, `manifest.json`, `splits.json`) and the gait generator presets |
 | `results/` | Analysis results and GIFs |
 
 ## Setup

@@ -6,26 +6,28 @@ members sign off below. After sign-off, this file changes only through a dated a
 **Code these rules refer to:**
 - `curation/eval/eval_clips.py`: score and per-clip metrics.
 - `playground/open_duck_mini_v2/tracking.py`: training environment.
-- `data/clips_v1/`: dataset.
+- `data/clips_v4/`: dataset.
 
 ## P.1 Clips and splits
 
-- Dataset `data/clips_v1` (`docs/DATASET.md`): 28 clips, 4 s each, gaits and crouches.
-- The split is per **source** (13 gait directions, 4 crouch depths), stratified by category, seed 7. Both variants of
-  a source share its split.
-- **Train 13 / val 4 / test 11 clips.** The split file (`splits.json`) is hashed and the hash is written here at
-  sign-off.
+- Dataset `data/clips_v4` (`docs/DATASET.md`): 74 clips, 4 s each, 10 categories. Gaits: forward, backward, side
+  step, turn in place, walk while turning, march in place. Stationary: crouch, bow, sway, head moves.
+- The split is per **source**, stratified by category, seed 7, drawn **after** the kinematic checks over the sources
+  that survive them: 1 val and 1 test source per category (every category has ≥ 3 surviving sources), the rest train.
+  Both variants of a source share its split.
+- **Train 37 / val 18 / test 19 clips**; every category has train, val and test clips. The split file (`splits.json`)
+  is hashed and the hash is written here at sign-off.
+- Model knee limit 1.66 rad (owner decision 2026-11-09, from robot logs; robot test R3 confirms).
 
-**Open issues the team must settle before sign-off:**
+**Settled since the first draft (owner, 2026-11-09):**
+1. Thin validation set → re-split so every category has a validation source (done in v3/v4).
+2. Crouch teaches nothing → knee limit raised to 1.66 rad. The crouch still reaches only 12 mm, and standing still
+   earned 89–97% of the reward on every stationary category. The environment now sizes the legs, head and keypoint
+   tolerances to each clip's own motion (`sigma_rel = 0.5` × the clip's rms distance from home, floored, capped at the
+   gait widths). Stand-vs-perfect ledger (`results/reward_ledger_v4.json`): gaits ≈ 2.6×, stationary 1.2–1.5×.
 
-1. **Validation set is thin.** 4 clips (two turn-in-place, two crouch) leaves some categories with no validation clip.
-   - Option A: re-split with 2 val sources per category where possible.
-   - Option B: choose τ by cross-validation over training clips instead.
-2. **Crouch clips teach nothing yet.**
-   - Standing still earns 98% of perfect tracking (reward ledger, `results/reward_ledger_v1.json`), because the model's
-     knee limit caps them at 8 mm.
-   - Either drop the crouch category from v1 or, after robot test R3 measures the real knee range, regenerate deeper
-     crouches.
+**Still open for the team:** keep the stationary categories in the study, or report them separately? Their score
+(P.2) is dominated by small errors and they will rank as the "easiest" clips whatever the policy does.
 
 ## P.2 Per-clip score (lower is better)
 

@@ -1,0 +1,123 @@
+From 4ea4ba15b79be50f80a77b9e0a446c5d54902f8a Mon Sep 17 00:00:00 2001
+From: Dhawal Kabra <dk5426@nyu.edu>
+Date: Mon, 9 Nov 2026 23:48:27 -0500
+Subject: [PATCH] tracking: motion-relative reward tolerances, knee limit 1.66
+ rad, head weight 1.0, dataset clips_v4
+
+---
+ playground/open_duck_mini_v2/tracking.py | 51 ++++++++++++++++++++++--
+ 1 file changed, 47 insertions(+), 4 deletions(-)
+
+diff --git a/playground/open_duck_mini_v2/tracking.py b/playground/open_duck_mini_v2/tracking.py
+index b729be0..1bdd83d 100644
+--- a/playground/open_duck_mini_v2/tracking.py
++++ b/playground/open_duck_mini_v2/tracking.py
+@@ -36,7 +36,8 @@ from . import base as open_duck_mini_v2_base
+ from . import constants
+ from .getup import make_randomizer as _getup_randomizer
+ 
+-LIBRARY_DIR = os.environ.get("CURATION_LIBRARY", "../open-duck-curation/data/clips_v1")
++LIBRARY_DIR = os.environ.get("CURATION_LIBRARY", "../open-duck-curation/data/clips_v4")
++KNEE_LIMIT = 1.66  # rad: the URDF/MJCF say 1.57, the real knee reached 1.66 in robot logs (owner decision 2026-11-09)
+ KEYPOINTS = [("site", "left_foot"), ("site", "right_foot"), ("body", "knee_and_ankle_assembly"),
+              ("body", "knee_and_ankle_assembly_3"), ("body", "head_assembly")]
+ PREVIEW = (5, 10, 20)
+@@ -66,13 +67,18 @@ def default_config() -> config_dict.ConfigDict:
+         ),
+         reward_config=config_dict.create(
+             scales=config_dict.create(
+-                legs=2.0, head=0.3, keypoints=1.5, lin_vel=1.0, yaw_rate=0.5, height=0.5, orientation=0.5,
++                legs=2.0, head=1.0, keypoints=1.5, lin_vel=1.0, yaw_rate=0.5, height=0.5, orientation=0.5,
+                 contacts=0.3, alive=0.5,
+                 action_rate=-0.05, torques=-1.0e-3, foot_slip=-1.0, termination=-20.0,
+             ),
+             # Gaussian widths, as the error at which the term pays exp(-1): sized to typical errors, so no term is flat
+-            sigma=config_dict.create(legs=0.15, head=0.15, keypoints=0.03, lin_vel=0.08, yaw_rate=0.4,
++            sigma=config_dict.create(legs=0.15, head=0.2, keypoints=0.03, lin_vel=0.08, yaw_rate=0.4,
+                                      height=0.015, orientation=0.15),
++            # Motion-relative tolerance for the legs, head and keypoint terms: sigma_clip = clip(rel * amplitude,
++            # floor, sigma) with amplitude = the clip's rms distance from the home pose. Without it, standing still
++            # earns 89-97% of the reward on small stationary clips (bow, sway, head, crouch; reward ledger v3).
++            sigma_rel=0.5,
++            sigma_floor=config_dict.create(legs=0.02, head=0.04, keypoints=0.004),
+         ),
+     )
+ 
+@@ -110,6 +116,10 @@ class Tracking(open_duck_mini_v2_base.OpenDuckMiniV2Env):
+                  config_overrides: Optional[Dict[str, Union[str, int, list[Any]]]] = None, clip_ids=None):
+         super().__init__(xml_path=constants.task_to_xml(task).as_posix(), config=config or default_config(),
+                          config_overrides=config_overrides)
++        for side in ("left", "right"):  # knee range as measured on the robot (the clip library is checked against it)
++            self._mj_model.jnt_range[self._mj_model.joint(f"{side}_knee").id] = [-KNEE_LIMIT, KNEE_LIMIT]
++            self._mj_model.actuator_ctrlrange[self._mj_model.actuator(f"{side}_knee").id] = [-KNEE_LIMIT, KNEE_LIMIT]
++        self._mjx_model = mjx.put_model(self._mj_model)
+         self._post_init(clip_ids)
+ 
+     def _post_init(self, clip_ids) -> None:
+@@ -123,6 +133,9 @@ class Tracking(open_duck_mini_v2_base.OpenDuckMiniV2Env):
+ 
+         lib, man = load_library()
+         self._manifest = man
++        if abs(man.get("knee_limit_rad", 1.57) - KNEE_LIMIT) > 1e-6:
++            print(f"WARNING: clip library was checked with knee limit {man.get('knee_limit_rad', 1.57)}, "
++                  f"env uses {KNEE_LIMIT}")
+         idx = select_clips(man, clip_ids)
+         self._clip_index = idx
+         self._clip_ids = [man["clips"][int(i)]["id"] for i in idx]
+@@ -137,6 +150,23 @@ class Tracking(open_duck_mini_v2_base.OpenDuckMiniV2Env):
+         self._ref_contacts = jp.array(sel("contacts"))
+         self._ref_kp = jp.array(sel("keypts"))
+         self._ref_len = jp.array(np.asarray(lib["length"])[idx])
++        # per-clip motion amplitude (rms distance from home over the clip's real frames) -> per-clip tolerances
++        home_ctrl = np.asarray(m.keyframe("home").ctrl)
++        lens = np.asarray(lib["length"])[idx]
++        sg, fl, rel = self._config.reward_config.sigma, self._config.reward_config.sigma_floor, \
++            self._config.reward_config.sigma_rel
++        amp_legs, amp_head, amp_kp = [], [], []
++        kp_all = np.asarray(lib["keypts"])[idx]
++        for i in range(len(idx)):
++            n = lens[i]
++            dq = q[i, :n] - home_ctrl
++            amp_legs.append(np.sqrt(np.mean(dq[:, LEGS] ** 2)))
++            amp_head.append(np.sqrt(np.mean(dq[:, HEAD] ** 2)))
++            amp_kp.append(np.mean(np.linalg.norm(kp_all[i, :n] - self._home_keypoints(), axis=-1)))
++        clip_sig = lambda amp, floor, cap: np.clip(rel * np.array(amp), floor, cap)  # noqa: E731
++        self._sig_legs = jp.array(clip_sig(amp_legs, fl.legs, sg.legs))
++        self._sig_head = jp.array(clip_sig(amp_head, fl.head, sg.head))
++        self._sig_kp = jp.array(clip_sig(amp_kp, fl.keypoints, sg.keypoints))
+         R = _quat_to_mat_np(sel("base_quat"))
+         self._ref_grav = jp.array(np.einsum("ntji,j->nti", R, np.array([0.0, 0.0, -1.0])))  # gravity in body frame
+         self._n_clips = len(idx)
+@@ -155,6 +185,17 @@ class Tracking(open_duck_mini_v2_base.OpenDuckMiniV2Env):
+         self._qpos_noise_scale = jp.array(qns)
+ 
+     # ------------------------------------------------------------------ helpers
++    def _home_keypoints(self):
++        """Body-frame keypoints at the home pose (numpy, from the MuJoCo model)."""
++        import mujoco
++        m = self._mj_model
++        d = mujoco.MjData(m)
++        d.qpos[:] = m.keyframe("home").qpos
++        d.qpos[0:3] = 0
++        d.qpos[3:7] = [1, 0, 0, 0]
++        mujoco.mj_kinematics(m, d)
++        return np.array([d.site_xpos[m.site(n).id] if k == "site" else d.xpos[m.body(n).id] for k, n in KEYPOINTS])
++
+     def _ref(self, clip, k):
+         k = jp.minimum(k, self._ref_len[clip] - 1)
+         return dict(q=self._ref_q[clip, k], qd=self._ref_qd[clip, k], pos=self._ref_pos[clip, k],
+@@ -276,8 +317,10 @@ class Tracking(open_duck_mini_v2_base.OpenDuckMiniV2Env):
+         slip = jp.sum(contact * jp.sum(jp.square((feet - info["prev_feet"])[:, :2] / self.dt), axis=-1))
+         fell = (-g[2] < self._config.terminate_tilt) | (e_h > self._config.terminate_height)
+         gauss = lambda e, s: jp.exp(-jp.square(e / s))  # noqa: E731
++        c = info["clip"]
+         terms = {
+-            "legs": gauss(e_legs, sg.legs), "head": gauss(e_head, sg.head), "keypoints": gauss(e_kp, sg.keypoints),
++            "legs": gauss(e_legs, self._sig_legs[c]), "head": gauss(e_head, self._sig_head[c]),
++            "keypoints": gauss(e_kp, self._sig_kp[c]),
+             "lin_vel": gauss(e_v, sg.lin_vel), "yaw_rate": gauss(e_w, sg.yaw_rate), "height": gauss(e_h, sg.height),
+             "orientation": gauss(e_g, sg.orientation),
+             "contacts": jp.mean((contact > 0.5) == (ref["contacts"] > 0.5)).astype(jp.float32),
+-- 
+2.50.1
+

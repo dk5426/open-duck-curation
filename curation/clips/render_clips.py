@@ -24,7 +24,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--lib", required=True)
     p.add_argument("--out", required=True)
-    p.add_argument("--cols", type=int, default=4)
+    p.add_argument("--cols", type=int, default=2)
     a = p.parse_args()
     from PIL import Image, ImageDraw, ImageFont
 

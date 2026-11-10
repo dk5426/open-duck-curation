@@ -6,7 +6,7 @@ robot (test ids refer to `ROBOT_TESTS.md`). Updated 2026-11-09.
 | Aspect | Model (`scene_flat_terrain_backlash.xml`) | Robot (measured) | Status |
 |---|---|---|---|
 | Mass | 2.107 kg total | not measured | **R2** |
-| Knee range | ±1.57 rad (also in the generator's URDF) | reached **1.66 rad** in walk logs, so the real limit is wider | **R3**; it caps the crouch at 8 mm |
+| Knee range | ±1.57 rad in the stock model; **raised to 1.66 rad** in the tracking env and the clip generator (owner decision 2026-11-09) | reached **1.66 rad** in walk logs, so the real limit is at least that | **R3** confirms; the crouch is still only 12 mm deep at 1.66 (8 mm at 1.57) |
 | Other leg ranges | hip pitch −1.22…0.52 (left), hip roll ±0.44, ankle ±1.57 | hip pitch reached −1.235 (left) and 1.239 (right), just past the model | **R3** |
 | Servo | position actuator kp 17.1, no velocity damping, torque limit 3.23 N·m; leg backlash ±0.5° | STS3215 7.4 V (firmware 3.10, model 9.3), runtime kp 22 (legs) / 8 (head), kd 0; datasheet stall ≈ 1.9 N·m; overload protection: 80% load for 2 s → 20% torque | see below |
 | Joint following | sim fed the robot's exact targets | leg joints differ by 0.056 rad on average; lag sim 0.101 vs robot 0.105 rad (36 recorded get-ups, `tools/getup_target_replay.py`) | matches for leg joints |

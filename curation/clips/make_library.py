@@ -41,14 +41,29 @@ SERVO_MAX_SPEED = 4.7  # rad/s: STS3215 7.4 V no-load 0.222 s / 60 deg (datashee
 # Gait sources come from curation/clips/gen_gaits.sh (Placo, joint-limit-respecting settings): one SOURCE per walking
 # direction (13), two VARIANTS per source (styles "normal" and "gentle"). Splits are drawn per source.
 # Crouch: one SOURCE per depth (fraction of the deepest reachable crouch), two VARIANTS per source (fast / slow).
-CROUCH_DEPTHS = [0.25, 0.5, 0.75, 1.0]
+CROUCH_DEPTHS = [0.2, 0.4, 0.6, 0.8, 1.0]
+# Stationary motions (v3, owner asked for more variety): feet planted, solved by IK.
+BOW_DEG = [10, 15, 20, 25]                    # sources: trunk pitch forward (deg), CoM kept over the feet
+BOW_STYLES = {"fast": (0.8, 1.0), "slow": (1.5, 0.5)}  # (down / up s, hold s)
+SWAY_AMP = [0.01, 0.02, 0.03]               # sources: fore-aft base sway amplitude (m)
+SWAY_FREQ = {"f0.5": 0.5, "f1.0": 1.0}      # variants: Hz
+HEAD_MOVES = ["nod", "shake", "look_around", "tilt"]  # sources
+HEAD_SPEEDS = {"slow": 0.5, "fast": 1.0}    # variants: Hz
 CROUCH_STYLES = {"fast": (0.8, 1.0), "slow": (1.5, 0.5)}  # (down / up duration s, hold s)
 # Split by source, stratified by category; seeded and recorded in the manifest. Each category keeps >= 1 train source.
 SPLIT_SEED = 7
 
 
-def load_model():
+KNEE_LIMIT = 1.66  # rad. Model/URDF say 1.57; the real knee reached 1.66 in robot logs (owner decision 2026-11-09)
+
+
+def load_model(knee_limit=KNEE_LIMIT):
     m = mujoco.MjModel.from_xml_string(epath.Path(SCENE).read_text(), assets=base.get_assets())
+    for side in ("left", "right"):
+        j = m.joint(f"{side}_knee").id
+        m.jnt_range[j] = [-knee_limit, knee_limit]
+        a = m.actuator(f"{side}_knee").id
+        m.actuator_ctrlrange[a] = [-knee_limit, knee_limit]
     return m, mujoco.MjData(m)
 
 
@@ -229,6 +244,116 @@ def crouch_clip(m, d, qadr, depth, t_move, t_hold, max_drop):
     return q, pos, quat, contacts, {"depth_m": drop, "depth_frac": depth, "move_s": t_move, "hold_s": t_hold}
 
 
+def quat_pitch(theta):
+    return np.array([np.cos(theta / 2), 0.0, np.sin(theta / 2), 0.0])  # rotation about +y: nose down for theta > 0
+
+
+def solve_legs_pose(m, d, qadr, dx, dz, pitch, iters=80):
+    """Leg joints for the base moved by (dx, dz) and pitched by `pitch` (rad), both soles fixed where they are at home
+    (position and orientation): damped least squares on each leg's hip pitch, knee and ankle."""
+    home = m.keyframe("home").qpos.copy()
+    d.qpos[:] = home
+    mujoco.mj_kinematics(m, d)
+    sites = [m.site("left_foot").id, m.site("right_foot").id]
+    tgt_p = [d.site_xpos[s_].copy() for s_ in sites]
+    tgt_R = [d.site_xmat[s_].reshape(3, 3).copy() for s_ in sites]
+    names = {0: ["left_hip_pitch", "left_knee", "left_ankle"], 1: ["right_hip_pitch", "right_knee", "right_ankle"]}
+    q = home.copy()
+    q[0] += dx
+    q[2] += dz
+    q[3:7] = quat_pitch(pitch)
+    err = 0.0
+    for _ in range(iters):
+        d.qpos[:] = q
+        mujoco.mj_kinematics(m, d)
+        mujoco.mj_comPos(m, d)
+        err = 0.0
+        for leg, s_ in enumerate(sites):
+            dofs = [m.jnt_dofadr[m.joint(n).id] for n in names[leg]]
+            qa = [m.jnt_qposadr[m.joint(n).id] for n in names[leg]]
+            e = np.concatenate([tgt_p[leg] - d.site_xpos[s_], mat_log(tgt_R[leg] @ d.site_xmat[s_].reshape(3, 3).T)])
+            err = max(err, float(np.linalg.norm(e)))
+            jp_, jr = np.zeros((3, m.nv)), np.zeros((3, m.nv))
+            mujoco.mj_jacSite(m, d, jp_, jr, s_)
+            J = np.vstack([jp_, jr])[:, dofs]
+            q[qa] += np.linalg.solve(J.T @ J + 1e-6 * np.eye(3), J.T @ e)
+        if err < 1e-6:
+            break
+    return q[qadr].copy(), q, err
+
+
+def balanced_bow(m, d, qadr, pitch):
+    """Bow by `pitch` with the base shifted back so the whole-body CoM stays over the middle of the feet."""
+    dx = 0.0
+    for _ in range(8):
+        qk, q, err = solve_legs_pose(m, d, qadr, dx, 0.0, pitch)
+        d.qpos[:] = q
+        mujoco.mj_kinematics(m, d)
+        mujoco.mj_comPos(m, d)
+        com = d.subtree_com[m.body("base").id]
+        feet_x = np.mean([d.site_xpos[m.site(n).id][0] for n in ("left_foot", "right_foot")])
+        if abs(com[0] - feet_x) < 5e-4:
+            break
+        dx -= com[0] - feet_x
+    return qk, q, err
+
+
+def minjerk(s_):
+    s_ = np.clip(s_, 0, 1)
+    return 10 * s_ ** 3 - 15 * s_ ** 4 + 6 * s_ ** 5
+
+
+def stationary_clip(m, d, qadr, kind, src, var):
+    """bow / sway / head clips: feet planted, both soles in contact the whole clip."""
+    T = int(CLIP_S * FPS)
+    t = np.arange(T) / FPS
+    home = m.keyframe("home").qpos
+    q, pos, quat = np.zeros((T, 14)), np.zeros((T, 3)), np.zeros((T, 4))
+    cache = {}
+    if kind == "bow":
+        tm, th = BOW_STYLES[var]
+        frac = minjerk((t - 0.4) / tm) - minjerk((t - 0.4 - tm - th) / tm)
+        params = {"pitch_deg": src, "move_s": tm, "hold_s": th}
+        for k in range(T):
+            key = round(float(frac[k]) * np.radians(src), 4)
+            if key not in cache:
+                cache[key] = balanced_bow(m, d, qadr, key)
+            qk, qfull, _ = cache[key]
+            q[k], pos[k], quat[k] = qk, qfull[0:3], qfull[3:7]
+    elif kind == "sway":
+        f = SWAY_FREQ[var]
+        env = minjerk(t / 0.6) * minjerk((CLIP_S - t) / 0.6)
+        dxs = src * np.sin(2 * np.pi * f * t) * env
+        params = {"amp_m": src, "freq_hz": f}
+        for k in range(T):
+            key = round(float(dxs[k]), 4)
+            if key not in cache:
+                cache[key] = solve_legs_pose(m, d, qadr, key, 0.0, 0.0)
+            qk, qfull, _ = cache[key]
+            q[k], pos[k], quat[k] = qk, qfull[0:3], qfull[3:7]
+    else:  # head
+        f = HEAD_SPEEDS[var]
+        hq = np.tile(m.keyframe("home").ctrl[5:9], (T, 1))  # neck_pitch, head_pitch, head_yaw, head_roll
+        env = minjerk(t / 0.5) * minjerk((CLIP_S - t) / 0.5)
+        w = np.sin(2 * np.pi * f * t) * env
+        if src == "nod":
+            hq[:, 1] += 0.4 * w
+        elif src == "shake":
+            hq[:, 2] += 0.5 * w
+        elif src == "tilt":
+            hq[:, 3] += 0.3 * w
+        else:  # look_around: yaw sweep with the head pitched down a little
+            hq[:, 2] += 0.5 * np.sin(np.pi * f * t) * env
+            hq[:, 1] += -0.2 * env
+        params = {"move": src, "freq_hz": f}
+        q[:] = m.keyframe("home").ctrl
+        q[:, 5:9] = hq
+        pos[:] = home[0:3]
+        quat[:] = home[3:7]
+    contacts = np.ones((T, 2), dtype=np.float32)
+    return q, pos, quat, contacts, params
+
+
 def max_crouch_drop(m, d, qadr, margin=0.05):
     """Deepest drop whose IK solution keeps every joint `margin` rad inside its range."""
     lo, hi = m.jnt_range[m.actuator_trnid[:, 0], 0], m.jnt_range[m.actuator_trnid[:, 0], 1]
@@ -289,8 +414,9 @@ def names_index(n):
 
 
 def assign_splits(sources):
-    """sources: list of (category, source_id). Per category, seeded shuffle; then 1 val and 1 test when the category
-    has >= 3 sources, else 1 test when it has 2; the rest train."""
+    """sources: list of (category, source_id), only sources with at least one variant passing the checks (v4: drawn
+    after the checks, so a dropped source can no longer empty a split). Per category, seeded shuffle; then 1 val and
+    1 test when the category has >= 3 sources, 1 val when it has 2; the rest train."""
     rng = np.random.default_rng(SPLIT_SEED)
     split = {}
     cats = sorted(set(c for c, _ in sources))
@@ -298,10 +424,8 @@ def assign_splits(sources):
         ids = [s for cc, s in sources if cc == c]
         rng.shuffle(ids)
         n = len(ids)
-        n_val = 1 if n >= 3 else 0
-        n_test = 1 if n >= 2 else 0
-        if n >= 6:
-            n_val, n_test = 2, 2
+        n_val = 1 if n >= 2 else 0
+        n_test = 1 if n >= 3 else 0
         for i, s in enumerate(ids):
             split[s] = "val" if i < n_val else ("test" if i < n_val + n_test else "train")
     return split
@@ -311,9 +435,10 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--gaits", required=True, help="output folder of gen_gaits.sh")
     p.add_argument("--out", required=True)
+    p.add_argument("--knee-limit", type=float, default=KNEE_LIMIT)
     a = p.parse_args()
     os.makedirs(a.out, exist_ok=True)
-    m, d = load_model()
+    m, d = load_model(a.knee_limit)
     qadr = np.array([m.jnt_qposadr[m.actuator_trnid[i, 0]] for i in range(m.nu)])
     assert [m.actuator(i).name for i in range(m.nu)] == ACT
 
@@ -323,14 +448,24 @@ def main():
     print(f"deepest crouch keeping every joint 0.03 rad inside its range: {1000 * max_drop:.1f} mm")
     for dep in CROUCH_DEPTHS:
         sources.append(("crouch", f"crouch__depth{dep:.2f}"))
-    split = assign_splits(sources)
-
+    sources += [("bow", f"bow__pitch{b}deg") for b in BOW_DEG]
+    sources += [("sway", f"sway__amp{a_:.2f}m") for a_ in SWAY_AMP]
+    sources += [("head", f"head__{h}") for h in HEAD_MOVES]
     clips = []
     for cat, sid in sources:
         if cat == "crouch":
             dep = float(sid.split("depth")[1])
             variants = [(f"__{sty}", crouch_clip(m, d, qadr, dep, tm, th, max_drop))
                         for sty, (tm, th) in CROUCH_STYLES.items()]
+        elif cat == "bow":
+            src = int(sid.split("pitch")[1][:-3])
+            variants = [(f"__{v}", stationary_clip(m, d, qadr, "bow", src, v)) for v in BOW_STYLES]
+        elif cat == "sway":
+            src = float(sid.split("amp")[1][:-1])
+            variants = [(f"__{v}", stationary_clip(m, d, qadr, "sway", src, v)) for v in SWAY_FREQ]
+        elif cat == "head":
+            src = sid.split("__")[1]
+            variants = [(f"__{v}", stationary_clip(m, d, qadr, "head", src, v)) for v in HEAD_SPEEDS]
         else:
             variants = [(f"__{sty}", gait_clip(m, d, qadr, path, 1.0)) for sty, path in sorted(gaits[(cat, sid)].items())]
         for suffix, (q, pos, quat, contacts, params) in variants:
@@ -338,21 +473,25 @@ def main():
             lin, ang = body_velocities(pos, quat)
             kp = keypoints(m, d, qadr, q)
             rep = check_clip(m, d, qadr, q, qd, pos, quat, contacts)
-            prm = {k: v for k, v in params.items() if isinstance(v, (int, float, str))} if cat != "crouch" else params
-            if cat != "crouch":
+            stationary = cat in ("crouch", "bow", "sway", "head")
+            prm = params if stationary else {k: v for k, v in params.items() if isinstance(v, (int, float, str))}
+            if not stationary:
                 prm = {"dx": prm.get("dx"), "dy": prm.get("dy"), "dtheta": prm.get("dtheta"), "style": suffix[2:],
                        "single_support_s": prm.get("single_support_duration"), "foot_lift_m": prm.get("walk_foot_height"),
                        "mean_vx": round(float(lin[:, 0].mean()), 4),
                        "mean_vy": round(float(lin[:, 1].mean()), 4), "mean_yaw_rate": round(float(ang[:, 2].mean()), 4)}
-            clips.append(dict(id=sid + suffix, category=cat, source=sid, split=split[sid], params=prm, check=rep,
+            clips.append(dict(id=sid + suffix, category=cat, source=sid, params=prm, check=rep,
                               arrays=dict(q=q, qd=qd, base_pos=pos, base_quat=quat, lin_vel=lin, ang_vel=ang,
                                           contacts=contacts, keypts=kp)))
-            print(f"  {split[sid]:5s} {sid + suffix:50s} {'pass' if rep['pass'] else 'FAIL'} "
+            print(f"  {sid + suffix:50s} {'pass' if rep['pass'] else 'FAIL'} "
                   f"margin {rep['joint_limit_margin_rad']:.3f} speed {rep['peak_joint_speed_rad_s']:5.2f}"
                   f"{'*' if rep['fast_for_servo'] else ' '} gap {rep['min_foot_gap_m']:.3f} "
                   f"stance spread {rep['stance_sole_z_spread_mm']:.1f} mm")
 
     kept = [c for c in clips if c["check"]["pass"]]
+    split = assign_splits([(c, s) for c, s in sources if any(k["source"] == s for k in kept)])
+    for c in kept:
+        c["split"] = split[c["source"]]
     T = max(len(c["arrays"]["q"]) for c in kept)
     def stack(key):
         arrs = [c["arrays"][key] for c in kept]
@@ -365,13 +504,13 @@ def main():
                         length=np.array([len(c["arrays"]["q"]) for c in kept], dtype=np.int32))
     manifest = {
         "fps": FPS, "joints": ACT, "keypoints": KEYPOINT_NAMES, "split_seed": SPLIT_SEED,
-        "max_crouch_drop_m": max_drop, "servo_max_speed_rad_s": SERVO_MAX_SPEED,
+        "max_crouch_drop_m": max_drop, "servo_max_speed_rad_s": SERVO_MAX_SPEED, "knee_limit_rad": a.knee_limit,
         "clips": [{k: c[k] for k in ("id", "category", "source", "split", "params", "check")} | {"index": i,
                   "length": len(c["arrays"]["q"])} for i, c in enumerate(kept)],
         "dropped_by_checks": [c["id"] for c in clips if not c["check"]["pass"]],
     }
     json.dump(manifest, open(os.path.join(a.out, "manifest.json"), "w"), indent=1)
-    splits = {s: split[s] for _, s in sources}
+    splits = dict(sorted(split.items()))
     json.dump(splits, open(os.path.join(a.out, "splits.json"), "w"), indent=1)
     n = {sp: sum(c["split"] == sp for c in kept) for sp in ("train", "val", "test")}
     print(f"library: {len(kept)} clips ({n}), {len(clips) - len(kept)} dropped by checks; {T} frames each (padded)")

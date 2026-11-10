@@ -1,0 +1,72 @@
+{
+ "bow": {
+  "perfect": 7.780846118927002,
+  "stand": 5.395150899887085,
+  "ratio": 1.4421924916112814,
+  "worst_clip": "bow__pitch20deg__fast",
+  "worst_ratio": 1.3899409125835174
+ },
+ "crouch": {
+  "perfect": 7.799999713897705,
+  "stand": 6.46523232460022,
+  "ratio": 1.2064531206742088,
+  "worst_clip": "crouch__depth0.20__fast",
+  "worst_ratio": 1.1061966083044146
+ },
+ "head": {
+  "perfect": 7.799999713897705,
+  "stand": 6.619506657123566,
+  "ratio": 1.1783355041276007,
+  "worst_clip": "head__tilt__slow",
+  "worst_ratio": 1.1043592721421949
+ },
+ "march": {
+  "perfect": 7.776942173639934,
+  "stand": 3.0551626284917197,
+  "ratio": 2.5455084129119743,
+  "worst_clip": "march__lift0.035__gentle",
+  "worst_ratio": 2.494811742965074
+ },
+ "side_step": {
+  "perfect": 7.775475184122722,
+  "stand": 3.025437911351522,
+  "ratio": 2.5700329710779837,
+  "worst_clip": "side_step__dx0_dy0.015_dth0__normal",
+  "worst_ratio": 2.535588027137742
+ },
+ "sway": {
+  "perfect": 7.799999713897705,
+  "stand": 5.216251293818156,
+  "ratio": 1.495326677060513,
+  "worst_clip": "sway__amp0.01m__f0.5",
+  "worst_ratio": 1.32798794517265
+ },
+ "turn_in_place": {
+  "perfect": 7.6488430840628485,
+  "stand": 2.7873945576804027,
+  "ratio": 2.744083381732659,
+  "worst_clip": "turn_in_place__dx0_dy0_dth-0.15__gentle",
+  "worst_ratio": 2.680703100704585
+ },
+ "walk_back": {
+  "perfect": 7.775736967722575,
+  "stand": 3.009628097216288,
+  "ratio": 2.583620539333292,
+  "worst_clip": "walk_back__dx-0.02_dy0_dth0__normal",
+  "worst_ratio": 2.5612456752292463
+ },
+ "walk_fwd": {
+  "perfect": 7.775691986083984,
+  "stand": 2.997324526309967,
+  "ratio": 2.5942109097064336,
+  "worst_clip": "walk_fwd__dx0.02_dy0_dth0__normal",
+  "worst_ratio": 2.5654216046037788
+ },
+ "walk_turn": {
+  "perfect": 7.715930302937825,
+  "stand": 2.8199716409047446,
+  "ratio": 2.736173013591827,
+  "worst_clip": "walk_turn__dx0.04_dy0_dth-0.15__gentle",
+  "worst_ratio": 2.7063567639615984
+ }
+}

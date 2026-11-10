@@ -143,7 +143,7 @@ def main():
     for cid, r in sorted(res.items(), key=lambda kv: kv[1]["score"]):
         print(f"{cid[:52]:52s} {cat[cid][1]:5s} {r['completion']:6.2f} {r['falls']:3d}/{r['rollouts']:<2d} {r['legs_rms']:6.3f} "
               f"{100 * r['keypoints']:6.2f} {r['lin_vel']:6.3f} {r['yaw_rate']:6.3f} {r['score']:6.2f}")
-    json.dump({"ckpt": os.path.abspath(a.ckpt), "tau_dof": TAU_DOF, "tau_key": TAU_KEY, "e_fail": E_FAIL,
+    json.dump({"ckpt": "/".join(os.path.abspath(a.ckpt).split("/")[-2:]), "tau_dof": TAU_DOF, "tau_key": TAU_KEY, "e_fail": E_FAIL,
                "rollouts": a.rollouts, "clips": res}, open(a.out, "w"), indent=1)
     print("wrote", a.out)
 
