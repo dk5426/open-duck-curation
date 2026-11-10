@@ -6,7 +6,7 @@ members sign off below. After sign-off, this file changes only through a dated a
 **Code these rules refer to:**
 - `curation/eval/eval_clips.py`: score and per-clip metrics.
 - `playground/open_duck_mini_v2/tracking.py`: training environment.
-- `data/clips_v4/`: dataset.
+- `data/clips_v5/`: dataset (proposed; the dry run used v4).
 
 ## P.1 Clips and splits
 
@@ -25,6 +25,13 @@ members sign off below. After sign-off, this file changes only through a dated a
    earned 89–97% of the reward on every stationary category. The environment now sizes the legs, head and keypoint
    tolerances to each clip's own motion (`sigma_rel = 0.5` × the clip's rms distance from home, floored, capped at the
    gait widths). Stand-vs-perfect ledger (`results/reward_ledger_v4.json`): gaits ≈ 2.6×, stationary 1.2–1.5×.
+
+3. **Proposed for sign-off: dataset v5** (`data/clips_v5`, same clips as v4, train 37 / val 19 / test 18). Its split
+   also requires the train sources of each category to move every joint the category moves. In v4 head_pitch moved
+   only in held-out head clips; its observation channels had zero variance in training and every policy fell on those
+   clips (`OVERNIGHT_LOG.md` 01:40).
+4. **Proposed: reference feed-forward actions** (joint target = reference + 0.25 × action). With home-based actions
+   the policy learned to stand (leg error 0.27 rad at 50M vs 0.058 with feed-forward).
 
 **Still open for the team:** keep the stationary categories in the study, or report them separately? Their score
 (P.2) is dominated by small errors and they will rank as the "easiest" clips whatever the policy does.

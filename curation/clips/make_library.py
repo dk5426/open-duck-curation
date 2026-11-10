@@ -413,10 +413,24 @@ def names_index(n):
     return ACT.index(n)
 
 
-def assign_splits(sources):
+def moved_joints(clips, source, tol=0.02):
+    """Joints (actuator indices) that any passing variant of `source` moves more than `tol` rad from its first frame."""
+    out = set()
+    for c in clips:
+        if c["source"] == source and c["check"]["pass"]:
+            q = c["arrays"]["q"]
+            out |= set(np.flatnonzero(np.abs(q - q[0]).max(0) > tol).tolist())
+    return out
+
+
+def assign_splits(sources, moved=None):
     """sources: list of (category, source_id), only sources with at least one variant passing the checks (v4: drawn
     after the checks, so a dropped source can no longer empty a split). Per category, seeded shuffle; then 1 val and
-    1 test when the category has >= 3 sources, 1 val when it has 2; the rest train."""
+    1 test when the category has >= 3 sources, 1 val when it has 2; the rest train.
+    v5: with `moved` (source -> set of joints it moves), the held-out sources are re-drawn (same seeded stream) until
+    the train sources of the category move every joint the category moves. Otherwise a joint that moves only in val /
+    test has zero variance in training, its observation normaliser divides by ~0 and the policy falls (v4: head_pitch
+    moved only in the held-out head sources)."""
     rng = np.random.default_rng(SPLIT_SEED)
     split = {}
     cats = sorted(set(c for c, _ in sources))
@@ -424,6 +438,16 @@ def assign_splits(sources):
         ids = [s for cc, s in sources if cc == c]
         rng.shuffle(ids)
         n = len(ids)
+        if moved is not None:
+            need = set().union(*(moved[s] for s in ids))
+            for _ in range(200):
+                n_out = (1 if n >= 2 else 0) + (1 if n >= 3 else 0)
+                train = ids[n_out:]
+                if set().union(set(), *(moved[s] for s in train)) >= need:
+                    break
+                rng.shuffle(ids)
+            else:
+                print(f"  warning: no split of {c} keeps every moved joint in train")
         n_val = 1 if n >= 2 else 0
         n_test = 1 if n >= 3 else 0
         for i, s in enumerate(ids):
@@ -489,7 +513,8 @@ def main():
                   f"stance spread {rep['stance_sole_z_spread_mm']:.1f} mm")
 
     kept = [c for c in clips if c["check"]["pass"]]
-    split = assign_splits([(c, s) for c, s in sources if any(k["source"] == s for k in kept)])
+    surv = [(c, s) for c, s in sources if any(k["source"] == s for k in kept)]
+    split = assign_splits(surv, {s: moved_joints(clips, s) for _, s in surv})
     for c in kept:
         c["split"] = split[c["source"]]
     T = max(len(c["arrays"]["q"]) for c in kept)

@@ -64,3 +64,13 @@ Timestamped journal of the overnight work (GPUs 1 and 2 only; GPU 3 stays free).
   untracked (leg error 0.25–0.69 rad). **Unseen head moves fall 4/4** (nod, look-around; val/test), while the trained
   head moves (tilt, shake) score best of all: a generalization failure within a category.
 - **01:22** Dry run restarted on the feed-forward env: scoring policy `dry_score_ff_100M` (GPU 1).
+- **01:40** Feed-forward rollouts (`results/dry_run/ab_ff_50M_rollouts.gif`): the walk now follows the reference (leg
+  error 0.04–0.09 rad, keypoints < 1 cm); the bow tracks. **`head__nod` falls within 0.2 s.** Open-loop in MuJoCo,
+  head_pitch ±0.4 rad tilts the base only 1–1.5°, so it is not physics. Cause: **no training clip moves head_pitch**
+  (v4's train head sources are shake and tilt), so its reference channels have normaliser std exactly 0 (8 channels
+  in all), and a 0.4 rad nod arrives at the network as ~10⁵. The unseen-head falls under the home-based policy have the
+  same cause.
+- **01:45** Fix for the real study (`make_library.py`, dataset **v5**, `data/clips_v5`): held-out sources are re-drawn
+  until the train sources move every joint the category moves. v5 head: look-around + tilt train, nod val, shake test.
+  The dry run stays on v4: the failure hits every condition equally on the same val/test clips (noise, not bias), and
+  restarting would cost 30 min. Head clips are reported separately in the dry-run results.
