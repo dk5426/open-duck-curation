@@ -18,9 +18,6 @@ import time
 
 import numpy as np
 
-sys.path.insert(0, "mini_bdx_runtime")
-from mini_bdx_runtime.duck_config import DuckConfig  # noqa: E402
-from mini_bdx_runtime.rustypot_position_hwi import HWI  # noqa: E402
 
 RANGE = {"left_hip_yaw": (-0.52, 0.52), "left_hip_roll": (-0.44, 0.44), "left_hip_pitch": (-1.22, 0.52),
          "left_knee": (-1.57, 1.57), "left_ankle": (-1.57, 1.57), "right_hip_yaw": (-0.52, 0.52),
@@ -50,6 +47,10 @@ def main():
     p.add_argument("--kp", type=float, default=22)
     p.add_argument("--out", default="step_test.npz")
     a = p.parse_args()
+    sys.path.insert(0, "mini_bdx_runtime")  # robot-only imports here, so profile() can be imported anywhere
+    from mini_bdx_runtime.duck_config import DuckConfig
+    from mini_bdx_runtime.rustypot_position_hwi import HWI
+
     hwi = HWI(DuckConfig())
     names = [n for n in hwi.joints if "antenna" not in n]
     home = dict(hwi.init_pos)
