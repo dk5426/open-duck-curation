@@ -26,16 +26,16 @@ Timestamped journal of the overnight work (GPUs 1 and 2 only; GPU 3 stays free).
   old fixed widths. Gaits are unchanged (capped); stationary clips get tight tolerances. Ledger after:
   crouch 1.21×, head 1.18×, sway 1.50×, bow 1.44×; gaits 2.55–2.74×.
 - **23:40** Stopped pilot 2 (v1 data, outdated). Started the dry-run scoring policy on v3 (GPU 2).
-- **23:50** Found that v3 has **no walk_fwd clip in train** and no test clip for walk_turn or bow: splits were drawn
+- **23:45** Found that v3 has **no walk_fwd clip in train** and no test clip for walk_turn or bow: splits were drawn
   before the checks, and the dropped sources emptied a split. Fix (v4): splits drawn after the checks over surviving
   sources; extra sources for the thin categories (walk_fwd 0.03 / 0.05 m, walk_turn at 0.02–0.03 m with 0.10–0.15
   rad, bow 15° / 25°). The v3 scoring run is restarted on v4. New tool `curation/clips/write_dataset_doc.py` writes
   `DATASET.md` from the manifest, so the per-category split table catches this immediately.
-- **00:05** Dataset **v4**: 74 clips (train 37 / val 18 / test 19), every category has train, val and test sources
+- **23:50** Dataset **v4**: 74 clips (train 37 / val 18 / test 19), every category has train, val and test sources
   (`docs/DATASET.md`, generated). Ledger v4 (`results/reward_ledger_v4.json`): gaits 2.55–2.74×, stationary
   1.18–1.50×. GIFs: `results/clips_v4/`.
-- **00:05** Why the crouch is only 12 mm even at 1.66 rad: the home stance already bends the knee to about 1.5 rad;
+- **23:50** Why the crouch is only 12 mm even at 1.66 rad: the home stance already bends the knee to about 1.5 rad;
   14 mm needs 1.64, 20 mm needs 1.74, 40 mm needs 2.05. The knee is the binding joint (the hips and ankles have room).
   A deeper crouch needs a different home stance, not a different limit.
-- **00:05** Scoring policy for the dry run restarted on v4: `dry_score_v4_150M`, GPU 2. Tracking env changes exported
+- **23:50** Scoring policy for the dry run restarted on v4: `dry_score_v4_150M`, GPU 2. Tracking env changes exported
   as `patches/open_duck_playground/0011-*.patch`.
