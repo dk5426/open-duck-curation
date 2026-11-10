@@ -29,3 +29,7 @@ budgets are halved.
 7. Test metrics (P.7) on the test clips, plus rollout GIFs.
 
 Results go to `results/dry_run/` and the log in `OVERNIGHT_LOG.md`.
+
+**Outcome (2026-11-10 04:58):** all steps ran. Curated (τ = p85) came out worst on test; random and kinematic matched
+full. The deficit is the same on clips curated trained on identically, so it reflects that one run, not curation.
+Tables and checks: `OVERNIGHT_REPORT.md`, section "Dry-run result"; `results/dry_run/comparison_*.md`.

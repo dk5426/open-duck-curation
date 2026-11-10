@@ -112,3 +112,10 @@ Timestamped journal of the overnight work (GPUs 1 and 2 only; GPU 3 stays free).
 - **04:07** Test rollouts, full vs curated, on the clips where they differ most (sway 0.03 m at 1 Hz, crouch 0.40, walk_fwd
   0.03 normal, walk_turn 0.04 / −0.15 gentle): `results/dry_run/gifs/test_full.gif`, `test_curated.gif` (curated is
   shorter, 346 vs 400 frames, because it falls).
+- **04:58** All test evaluations done (`results/dry_run/test/`, `comparison_*.md`). Nominal mean e: full 1.342, curated
+  1.528, random 1.333, kinematic 1.301. Curated is worse than every other condition with the CI excluding 0, under every
+  perturbation and with or without head; P.9 fails. Random and kinematic sit within 0.04 of full.
+- **05:00** Why curated lost. Its deficit is the same on test categories where it trained on exactly the same clips as
+  full (+0.21) as on the two it cut (+0.18), and its training episode length lagged from the start (97 vs 145–149 at
+  50M, 129 vs 148–154 at 100M). This reads as a slow run (seed), not a curation effect. The alternative, that hard
+  clips teach balance recovery that transfers, cannot be separated without seeds. Write-up: `OVERNIGHT_REPORT.md`.
