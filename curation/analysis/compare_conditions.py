@@ -2,8 +2,8 @@
 
 For every condition: mean test score e, completion, falls, coverage (share of categories with at least one test clip
 completed >= 0.8). For curated against each other condition: the paired difference in e over test clips with a 95%
-bootstrap CI (10,000 resamples over clips; with several seeds per condition, seeds are averaged per clip first), per
-category and overall, and the P.9 pass bar.
+bootstrap CI (10,000 resamples over clips; with several seeds per condition, seeds are resampled within each drawn
+clip, as P.8 states), per category and overall, and the P.9 pass bar.
 
   python compare_conditions.py --manifest data/clips_v4/manifest.json --out results/dry_run/comparison.md \
       --cond full=eval_full.json curated=eval_curated.json random=eval_random.json kinematic=eval_kinematic.json \
@@ -23,13 +23,22 @@ B = 10_000
 def load(paths):
     runs = [json.load(open(p))["clips"] for p in paths.split(",")]
     ids = sorted(set.intersection(*(set(r) for r in runs)))
-    return {i: {k: float(np.mean([r[i][k] for r in runs])) for k in ("score", "completion", "falls")} for i in ids}
+    out = {i: {k: float(np.mean([r[i][k] for r in runs])) for k in ("score", "completion", "falls")} for i in ids}
+    for i in ids:
+        out[i]["seeds"] = np.array([r[i]["score"] for r in runs])
+    return out
 
 
-def boot_ci(d, rng):
-    if len(d) < 2:
+def boot_ci(ref, oth, rng):
+    """95% CI of mean(ref - oth): clips resampled, then one seed per condition drawn within each drawn clip."""
+    n = len(ref)
+    if n < 2:
         return float("nan"), float("nan")
-    m = rng.choice(d, size=(B, len(d)), replace=True).mean(1)
+    a, b = np.stack(ref), np.stack(oth)  # (clips, seeds)
+    c = rng.integers(0, n, size=(B, n))
+    sa = rng.integers(0, a.shape[1], size=(B, n))
+    sb = rng.integers(0, b.shape[1], size=(B, n))
+    m = (a[c, sa] - b[c, sb]).mean(1)
     return float(np.percentile(m, 2.5)), float(np.percentile(m, 97.5))
 
 
@@ -64,7 +73,7 @@ def main():
         if k == a.ref:
             continue
         d = np.array([res[a.ref][i]["score"] - res[k][i]["score"] for i in ids])
-        lo, hi = boot_ci(d, rng)
+        lo, hi = boot_ci([res[a.ref][i]["seeds"] for i in ids], [res[k][i]["seeds"] for i in ids], rng)
         per = []
         for c in cats:
             dc = np.array([res[a.ref][i]["score"] - res[k][i]["score"] for i in ids if cat[i] == c])

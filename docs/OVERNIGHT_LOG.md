@@ -102,3 +102,13 @@ Timestamped journal of the overnight work (GPUs 1 and 2 only; GPU 3 stays free).
   only. Random also happens to draw no march clip.
 - **04:03** Test evaluation chained on the cluster (`tools_dry/eval_finals.sh`): curated now, random and kinematic as
   their training ends.
+- **04:06** First test result, curated vs full (nominal, 19 test clips): **curated is worse**, Δe +0.19 [95% CI +0.09,
+  +0.31], falls 3.8 vs 1.9 per clip. Curated (p85) dropped 5 train clips, all fast walk_fwd / walk_turn. But the
+  biggest losses are in categories where curated and full trained on **identical** clips: sway +0.81 (sway 0.03 m at
+  1 Hz: 1.15 → 2.29), crouch +0.18. With one seed per condition, run-to-run noise is at least as large as the effect
+  being measured. This is the main lesson of the dry run so far: the 3 seeds per condition in PREREG P.6 are needed,
+  not optional. `compare_conditions.py` now resamples seeds within each drawn clip, as P.8 states (it previously
+  averaged them first, which would have made the CI too narrow).
+- **04:07** Test rollouts, full vs curated, on the clips where they differ most (sway 0.03 m at 1 Hz, crouch 0.40, walk_fwd
+  0.03 normal, walk_turn 0.04 / −0.15 gentle): `results/dry_run/gifs/test_full.gif`, `test_curated.gif` (curated is
+  shorter, 346 vs 400 frames, because it falls).
