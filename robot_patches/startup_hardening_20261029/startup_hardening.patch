@@ -1,0 +1,351 @@
+diff -ru original/mini_bdx_runtime/mini_bdx_runtime/rustypot_position_hwi.py patched/mini_bdx_runtime/mini_bdx_runtime/rustypot_position_hwi.py
+--- original/mini_bdx_runtime/mini_bdx_runtime/rustypot_position_hwi.py	2026-10-29 21:05:00
++++ patched/mini_bdx_runtime/mini_bdx_runtime/rustypot_position_hwi.py	2026-10-29 21:07:49
+@@ -58,7 +58,17 @@
+             return self.io.disable_torque(ids)
+         return self.io.sync_write_torque_enable(ids, [False] * len(ids))
+ 
++    def enable_torque(self, ids):
++        """Returns False when the bus library has no way to enable torque (old rustypot.feetech API)."""
++        if self.legacy_api:
++            if hasattr(self.io, "enable_torque"):
++                self.io.enable_torque(ids)
++                return True
++            return False
++        self.io.sync_write_torque_enable(ids, [True] * len(ids))
++        return True
+ 
++
+ class HWI:
+     def __init__(self, duck_config: DuckConfig, usb_port: str = "/dev/ttyACM0"):
+ 
+@@ -227,33 +237,107 @@
+             self._log_servo_error("set_kp", [id], e)
+             raise
+ 
++    # Startup hardening (2026-10-29): a kp write that failed 3 times used to leave that servo at the soft start-up
++    # kp (2) with only a warning, so the duck sagged or never reached its pose; torque was never switched back on
++    # after `run_duck.sh stop`; nothing checked that the pose was reached.
++    POSE_TOLERANCE_RAD = 0.15
++    POSE_CHECK_ROUNDS = 3
++
++    def _write_each(self, label, write_fn, values, rounds=3):
++        """Write one value per servo, re-trying failed servos for a few rounds. Returns the ids that never took it."""
++        pending = list(enumerate(self.joint_ids))
++        for _ in range(rounds):
++            still = []
++            for i, sid in pending:
++                ok = self._write_servo_with_retry(
++                    lambda s=sid, v=values[i]: write_fn([s], [v]), sid, max_retries=3, delay=0.1
++                )
++                if not ok:
++                    still.append((i, sid))
++                time.sleep(0.01)
++            pending = still
++            if not pending:
++                return []
++            print(f"[WARN] {label}: retrying {self._format_servos([sid for _, sid in pending])}")
++            time.sleep(0.2)
++        return [sid for _, sid in pending]
++
++    def _enable_torque_all(self):
++        if self.io.legacy_api and not hasattr(self.io.io, "enable_torque"):
++            print("[WARN] this rustypot version cannot enable torque explicitly; relying on goal writes")
++            return []
++        return self._write_each("torque on", lambda ids, values: self.io.enable_torque(ids), [True] * len(self.joint_ids))
++
++    def _check_pose(self):
++        """Read every joint back and re-send goal + kp to joints that are off the start pose. Never fatal on its own:
++        a joint can sit slightly off under load; communication failures are what abort the start."""
++        names = list(self.init_pos.keys())
++        for rnd in range(self.POSE_CHECK_ROUNDS):
++            present = self.get_present_positions()
++            if present is None:
++                print("[WARN] pose check: could not read positions")
++                return
++            errors = {n: float(present[k] - self.init_pos[n]) for k, n in enumerate(names)}
++            off = {n: e for n, e in errors.items() if abs(e) > self.POSE_TOLERANCE_RAD}
++            if not off:
++                worst = max(errors, key=lambda n: abs(errors[n]))
++                print(f"turn on : pose reached (worst {worst} {errors[worst]:+.3f} rad)")
++                return
++            print("[WARN] pose check round %d: off by > %.2f rad: %s" % (
++                rnd + 1, self.POSE_TOLERANCE_RAD, ", ".join(f"{n} {e:+.2f}" for n, e in off.items())))
++            for n in off:
++                sid = self.joints[n]
++                k = list(self.joints.keys()).index(n)
++                try:
++                    self.io.write_goal_position([sid], [self.init_pos[n] + self.joints_offsets[n]])
++                    self.io.set_kps([sid], [self.kps[k]])
++                except Exception as e:
++                    self._log_servo_error("pose check re-write", [sid], e)
++            time.sleep(0.5)
++        print("[WARN] pose check: some joints still off the start pose after re-writes (see above); "
++              "check that joint for load, a loose horn or a wrong offset in duck_config.json")
++
++    def go_soft_home(self):
++        """Reset button, step 1: torque on, soft kp, goal = start pose. The duck goes limp-ish and gently holds the
++        home pose so it can be set upright by hand."""
++        failed = set(self._enable_torque_all())
++        failed |= set(self._write_each("reset: low kps", self.io.set_kps, self.low_torque_kps))
++        self.set_position_all(self.init_pos)
++        return failed
++
++    def stiffen_home(self):
++        """Reset button, step 2: full kp at the start pose, then the same pose check as start-up. Does not raise:
++        the caller keeps the runtime paused and reports failures."""
++        self.set_position_all(self.init_pos)
++        failed = set(self._write_each("reset: high kps", self.io.set_kps, self.kps))
++        time.sleep(0.5)
++        self._check_pose()
++        return failed
++
+     def turn_on(self):
++        # Phase 0: torque on (run_duck.sh stop switches it off)
++        failed = set(self._enable_torque_all())
++
+         # Phase 1: low kps (safe torque)
+-        for i, sid in enumerate(self.joint_ids):
+-            self._write_servo_with_retry(
+-                lambda s=sid, k=self.low_torque_kps[i]: self.io.set_kps([s], [k]),
+-                sid, max_retries=3, delay=0.1
+-            )
+-            time.sleep(0.01)
++        failed |= set(self._write_each("low kps", self.io.set_kps, self.low_torque_kps))
+         print("turn on : low KPS set")
+         time.sleep(1)
+ 
+-        # Phase 2: move to init position (one-by-one)
++        # Phase 2: goal = start pose
+         self.set_position_all(self.init_pos)
+         print("turn on : init pos set")
+-
+         time.sleep(1)
+ 
+-        # Phase 3: high kps (full torque)
+-        for i, sid in enumerate(self.joint_ids):
+-            self._write_servo_with_retry(
+-                lambda s=sid, k=self.kps[i]: self.io.set_kps([s], [k]),
+-                sid, max_retries=3, delay=0.1
+-            )
+-            time.sleep(0.01)
++        # Phase 3: high kps (full torque); a servo left at kp 2 is a limp joint, so this must not fail silently
++        failed |= set(self._write_each("high kps", self.io.set_kps, self.kps))
+         print("turn on : high kps")
+ 
+-        # Report failed servos
++        # Phase 4: did every joint get there?
++        time.sleep(0.5)
++        self._check_pose()
++
++        # Servos whose earlier set_kps()/set_kds() write failed but which took every write here are fine now.
++        self.failed_servos = (self.failed_servos - set(self.joint_ids)) | failed
+         if self.failed_servos:
+             names = []
+             for sid in self.failed_servos:
+diff -ru original/mini_bdx_runtime/mini_bdx_runtime/xbox_controller.py patched/mini_bdx_runtime/mini_bdx_runtime/xbox_controller.py
+--- original/mini_bdx_runtime/mini_bdx_runtime/xbox_controller.py	2026-10-29 21:05:00
++++ patched/mini_bdx_runtime/mini_bdx_runtime/xbox_controller.py	2026-10-29 21:08:34
+@@ -1,3 +1,4 @@
++import os
+ import pygame
+ from threading import Thread
+ from queue import Queue
+@@ -29,6 +30,20 @@
+         self.last_left_trigger = 0.0
+         self.last_right_trigger = 0.0
+         pygame.init()
++        # Startup hardening (2026-10-29): run_duck.sh only waits for /dev/input/js0 to exist; pygame can still report
++        # no joystick for a moment after a Bluetooth (re)connect, and Joystick(0) then raises. Wait for it instead.
++        timeout = float(os.environ.get("DUCK_PYGAME_JOYSTICK_TIMEOUT", "30"))
++        t0 = time.monotonic()
++        while pygame.joystick.get_count() < 1:
++            if time.monotonic() - t0 > timeout:
++                raise RuntimeError(
++                    f"pygame sees no joystick after {timeout:g} s although /dev/input/js0 existed; "
++                    "reconnect the controller (Xbox button) and restart"
++                )
++            print("[WAIT] pygame does not see the controller yet; re-scanning")
++            pygame.joystick.quit()
++            pygame.joystick.init()
++            time.sleep(1.0)
+         self.p1 = pygame.joystick.Joystick(0)
+         self.p1.init()
+         print(f"Loaded joystick with {self.p1.get_numaxes()} axes.")
+diff -ru original/scripts/v2_rl_walk_mujoco.py patched/scripts/v2_rl_walk_mujoco.py
+--- original/scripts/v2_rl_walk_mujoco.py	2026-10-29 21:05:00
++++ patched/scripts/v2_rl_walk_mujoco.py	2026-10-29 21:07:49
+@@ -55,6 +55,10 @@
+         self.shutdown_button_index = int(os.environ.get('DUCK_SHUTDOWN_BUTTON_INDEX', '15'))
+         self.shutdown_hold = HoldToShutdown(float(os.environ.get('DUCK_SHUTDOWN_HOLD_SECONDS', '7')))
+         self.shutdown_requested = False
++        # Reset-to-home button (2026-10-29): hold = soft at the home pose, release = stiff at the home pose with a
++        # fresh policy state; the runtime stays paused, press A to walk again.
++        self.reset_button_index = int(os.environ.get("DUCK_RESET_BUTTON_INDEX", "7"))  # RB on this pad
++        self.resetting = False
+         self.duck_config = DuckConfig(config_json_path=duck_config_path)
+ 
+         self.commands = commands
+@@ -88,8 +92,10 @@
+         self.hwi = HWI(self.duck_config, serial_port)
+         # print(f"[INFO] Joints in HWI: {list(self.hwi.joints.keys())}")
+ 
+-        self.start()
+-
++        # Startup hardening (2026-10-29): everything that can fail is set up BEFORE any motor moves. Before, the IMU,
++        # foot switches and controller were opened after the duck had stood up; a failure there crashed the script
++        # with the motors still on, systemd restarted it 5 s later and turn_on() began again at kp 2, so the duck
++        # sagged and re-posed in a loop.
+         self.imu = Imu(
+             sampling_freq=int(self.control_freq),
+             user_pitch_bias=self.pitch_bias,
+@@ -98,6 +104,29 @@
+ 
+         self.feet_contacts = FeetContacts()
+ 
++        self.command_freq = 20  # hz
++        if self.command_source == "xbox":
++            self.xbox_controller = XBoxController(self.command_freq)
++            self.command_controller = self.xbox_controller
++        elif self.command_source == "keyboard":
++            self.keyboard_controller = KeyboardController(self.command_freq)
++            self.command_controller = self.keyboard_controller
++        else:
++            self.command_controller = None
++
++        # Reference motion, but we only really need the length of one phase
++        # TODO
++        self.PRM = PolyReferenceMotion(os.path.join(REPO_DIR, "scripts", "polynomial_coefficients.pkl"))
++        self.imitation_i = 0
++        self.imitation_phase = np.array([0, 0])
++        self.phase_frequency_factor = 1.0
++        self.phase_frequency_factor_offset = (
++            self.duck_config.phase_frequency_factor_offset
++        )
++
++        print("[START] sensors and controller ready; moving to the start pose")
++        self.start()
++
+         # Scales
+         self.action_scale = action_scale
+         self.min_motor_voltage = min_motor_voltage
+@@ -122,38 +151,28 @@
+ 
+         self.paused = self.duck_config.start_paused
+ 
+-        self.command_freq = 20  # hz
+-        if self.command_source == "xbox":
+-            self.xbox_controller = XBoxController(self.command_freq)
+-            self.command_controller = self.xbox_controller
+-        elif self.command_source == "keyboard":
+-            self.keyboard_controller = KeyboardController(self.command_freq)
+-            self.command_controller = self.keyboard_controller
+-        else:
+-            self.command_controller = None
+-
+-        # Reference motion, but we only really need the length of one phase
+-        # TODO
+-        self.PRM = PolyReferenceMotion(os.path.join(REPO_DIR, "scripts", "polynomial_coefficients.pkl"))
+-        self.imitation_i = 0
+-        self.imitation_phase = np.array([0, 0])
+-        self.phase_frequency_factor = 1.0
+-        self.phase_frequency_factor_offset = (
+-            self.duck_config.phase_frequency_factor_offset
+-        )
+-
+-        # Optional expression features
++        # Optional expression features: a failure disables that feature only (it no longer crashes the runtime
++        # after the duck has stood up).
+         if self.duck_config.eyes:
+-            self.eyes = Eyes()
++            self.eyes = self._optional_feature("eyes", Eyes)
+         if self.duck_config.projector:
+-            self.projector = Projector()
++            self.projector = self._optional_feature("projector", Projector)
+         if self.duck_config.speaker:
+-            self.sounds = Sounds(
+-                volume=2.0, sound_directory=os.path.join(REPO_DIR, "mini_bdx_runtime", "assets/")
++            self.sounds = self._optional_feature(
++                "speaker",
++                lambda: Sounds(volume=2.0, sound_directory=os.path.join(REPO_DIR, "mini_bdx_runtime", "assets/")),
+             )
+         if self.duck_config.antennas:
+-            self.antennas = Antennas()
++            self.antennas = self._optional_feature("antennas", Antennas)
+ 
++    def _optional_feature(self, flag, make):
++        try:
++            return make()
++        except Exception as e:
++            print(f"[WARN] {flag} disabled: {e}")
++            setattr(self.duck_config, flag, False)
++            return None
++
+     def get_obs(self):
+ 
+         imu_data = self.imu.get_data()
+@@ -291,6 +310,45 @@
+ 
+         return freq
+ 
++    def _reset_policy_state(self):
++        """Same state as a fresh start: no action history, targets at the start pose, gait phase at 0."""
++        self.last_action = np.zeros(self.num_dofs)
++        self.last_last_action = np.zeros(self.num_dofs)
++        self.last_last_last_action = np.zeros(self.num_dofs)
++        self.motor_targets = np.array(self.init_pos.copy())
++        self.prev_motor_targets = np.array(self.init_pos.copy())
++        self.imitation_i = 0
++        self.imitation_phase = np.array([0, 0])
++        self.last_commands = [0.0] * 7
++        for attr in ("last_good_gyro", "last_good_accel"):
++            if hasattr(self, attr):
++                delattr(self, attr)
++
++    def _check_reset_button(self):
++        """Hold the reset button: pause and go soft at the home pose. Release: stiffen at the home pose, reset the
++        policy state, stay paused. Reads the raw button snapshot (the Buttons() flags flicker between 20 Hz samples)."""
++        controller = self.command_controller
++        if controller is None or not hasattr(controller, "get_raw_button_sample") or self.shutdown_requested:
++            return
++        pressed, sampled_at = controller.get_raw_button_sample(self.reset_button_index)
++        fresh = sampled_at and time.monotonic() - sampled_at < 0.5
++        if pressed and fresh and not self.resetting:
++            self.resetting = True
++            self.paused = True
++            print("[RESET] going soft at the home pose; set the duck upright, then release the button", flush=True)
++            failed = self.hwi.go_soft_home()
++            if failed:
++                print(f"[RESET][ERROR] servo writes failed: {self.hwi._format_servos(sorted(failed))}", flush=True)
++        elif self.resetting and fresh and not pressed:
++            failed = self.hwi.stiffen_home()
++            self._reset_policy_state()
++            self.resetting = False
++            self.paused = True
++            if failed:
++                print(f"[RESET][ERROR] servos not stiff: {self.hwi._format_servos(sorted(failed))}; "
++                      "check them before walking", flush=True)
++            print("[RESET] at the home pose, paused; press A to start the policy", flush=True)
++
+     def _check_controller_shutdown(self):
+         controller = self.command_controller
+         if controller is None or not hasattr(controller, "get_raw_button_sample"):
+@@ -326,6 +384,7 @@
+                     )
+                     if self._check_controller_shutdown():
+                         break
++                    self._check_reset_button()
+                     # if i % 20 == 0:
+                     #     print(f"[CMD] lin_x={self.last_commands[0]:.3f}, lin_y={self.last_commands[1]:.3f}, yaw={self.last_commands[2]:.3f}")
+ 
+@@ -365,7 +424,9 @@
+                         self.antennas.set_position_left(left_trigger)
+                         self.antennas.set_position_right(right_trigger)
+ 
+-                    if self.buttons.A.triggered:
++                    if self.buttons.A.triggered and self.resetting:
++                        print("[RESET] release RB first; A ignored while the duck is soft")
++                    elif self.buttons.A.triggered:
+                         self.paused = not self.paused
+                         if self.paused:
+                             print("PAUSE")

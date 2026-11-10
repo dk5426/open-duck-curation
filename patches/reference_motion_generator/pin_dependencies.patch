@@ -1,0 +1,11 @@
+diff --git a/pyproject.toml b/pyproject.toml
+index 817c3f5..d3400a6 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -13,3 +13,6 @@ dependencies = [
+     "scikit-learn>=1.6.1",
+     "scipy>=1.15.2",
+ ]
++
++[tool.uv]
++exclude-newer = "2025-04-04T00:00:00Z"

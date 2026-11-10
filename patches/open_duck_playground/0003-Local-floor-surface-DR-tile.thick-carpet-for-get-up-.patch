@@ -1,0 +1,80 @@
+From 97eb57ae637babdb27c20aadd4339cb07b0e2c41 Mon Sep 17 00:00:00 2001
+From: Dhawal Kabra <dk5426@nyu.edu>
+Date: Thu, 29 Oct 2026 20:29:30 -0400
+Subject: [PATCH 3/9] Local: floor-surface DR (tile..thick carpet) for get-up
+ and jump
+---
+ playground/open_duck_mini_v2/getup.py      |  7 ++--
+ playground/open_duck_mini_v2/surface_dr.py | 38 ++++++++++++++++++++++
+ 2 files changed, 43 insertions(+), 2 deletions(-)
+ create mode 100644 playground/open_duck_mini_v2/surface_dr.py
+
+diff --git a/playground/open_duck_mini_v2/getup.py b/playground/open_duck_mini_v2/getup.py
+index fef1cf2..04e0c95 100644
+--- a/playground/open_duck_mini_v2/getup.py
++++ b/playground/open_duck_mini_v2/getup.py
+@@ -302,7 +302,8 @@ class Getup(open_duck_mini_v2_base.OpenDuckMiniV2Env):
+ def make_randomizer(mj_model):
+     """Upstream's domain_randomize with the body/geom ids looked up by name. Upstream hardcodes FLOOR_GEOM_ID = 0
+     (a trunk mesh, so floor friction is never randomized) and TORSO_BODY_ID = 1 ('base', massless, so the CoM shift
+-    does nothing and the +-0.1 kg can make its mass negative)."""
++    does nothing and the +-0.1 kg can make its mass negative). Wrapped with floor-surface randomization (tile ...
++    thick carpet, surface_dr.py)."""
+     from playground.common import randomize
+ 
+     floor_id = mj_model.geom("floor").id
+@@ -316,4 +317,6 @@ def make_randomizer(mj_model):
+         finally:
+             randomize.FLOOR_GEOM_ID, randomize.TORSO_BODY_ID = old
+ 
+-    return domain_randomize
++    from playground.open_duck_mini_v2.surface_dr import add_surface_dr
++
++    return add_surface_dr(domain_randomize, floor_id)
+diff --git a/playground/open_duck_mini_v2/surface_dr.py b/playground/open_duck_mini_v2/surface_dr.py
+new file mode 100644
+index 0000000..0d6e0e1
+--- /dev/null
++++ b/playground/open_duck_mini_v2/surface_dr.py
+@@ -0,0 +1,38 @@
++"""Floor-surface domain randomization (tile ... thick carpet) for Open Duck Mini V2. Local addition, not upstream.
++
++The floor geom has priority 1, so its friction / solref / solimp alone decide every foot contact (no averaging with
++the sole). Each env samples, independently of upstream's other randomization:
++  friction  mu ~ U[MU_RANGE]                                   (tile ~0.3, wood ~0.5, carpet/rubber ~0.9-1.0)
++  softness  s ~ U[0, 1]  ->  solref = (0.02 + 0.06 s, 1 - 0.2 s), solimp[:3] = (0.9 - 0.6 s, 0.95, 0.001 + 0.009 s)
++s = 0 is MuJoCo's default hard contact (the training floor), s = 1 is the "thick_carpet" setting of
++tools/surface_eval.py; measured standing sink of the walker: 0.2 mm at s = 0, 6.9 mm at s = 1. The time constant stays >= 0.02 s, well above 2 x the 0.002 s timestep.
++"""
++
++import jax
++import jax.numpy as jp
++
++MU_RANGE = (0.25, 1.0)  # a bit below tile (0.3) .. carpet/rubber
++
++
++def add_surface_dr(randomize_fn, floor_id, mu_range=MU_RANGE):
++    """Wrap a playground randomizer (model, rng) -> (model, in_axes) with floor-surface randomization."""
++
++    def domain_randomize(model, rng):
++        model, in_axes = randomize_fn(model, rng)
++        keys = jax.vmap(lambda k: jax.random.fold_in(k, 0x5DF))(rng)
++
++        def one(key, friction):
++            k_soft, k_mu = jax.random.split(key)
++            s = jax.random.uniform(k_soft)
++            mu = jax.random.uniform(k_mu, minval=mu_range[0], maxval=mu_range[1])
++            friction = friction.at[floor_id, 0].set(mu)
++            solref = model.geom_solref.at[floor_id].set(jp.array([0.02 + 0.06 * s, 1.0 - 0.2 * s]))
++            solimp = model.geom_solimp.at[floor_id, :3].set(jp.array([0.9 - 0.6 * s, 0.95, 0.001 + 0.009 * s]))
++            return friction, solref, solimp
++
++        friction, solref, solimp = jax.vmap(one)(keys, model.geom_friction)
++        model = model.tree_replace({"geom_friction": friction, "geom_solref": solref, "geom_solimp": solimp})
++        in_axes = in_axes.tree_replace({"geom_friction": 0, "geom_solref": 0, "geom_solimp": 0})
++        return model, in_axes
++
++    return domain_randomize
+-- 
+2.50.1
+

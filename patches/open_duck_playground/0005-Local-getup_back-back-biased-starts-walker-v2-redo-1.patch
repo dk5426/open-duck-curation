@@ -1,0 +1,240 @@
+From 8b3fa82a0e4dfe7988026a3dd140a6f4086c7775 Mon Sep 17 00:00:00 2001
+From: Dhawal Kabra <dk5426@nyu.edu>
+Date: Fri, 30 Oct 2026 11:36:26 -0400
+Subject: [PATCH 5/9] Local: getup_back (back-biased starts), walker v2 redo
+ (+-1 cm CoM), jump2 (crouch-then-push, +-1 cm CoM)
+---
+ playground/open_duck_mini_v2/getup.py         | 24 ++++++--
+ playground/open_duck_mini_v2/getup_back.py    | 16 ++++++
+ .../open_duck_mini_v2/joystick_sdr_com1cm.py  |  9 +++
+ playground/open_duck_mini_v2/jump.py          |  6 +-
+ playground/open_duck_mini_v2/jump2.py         | 55 +++++++++++++++++++
+ playground/open_duck_mini_v2/runner.py        |  4 ++
+ 6 files changed, 106 insertions(+), 8 deletions(-)
+ create mode 100644 playground/open_duck_mini_v2/getup_back.py
+ create mode 100644 playground/open_duck_mini_v2/joystick_sdr_com1cm.py
+ create mode 100644 playground/open_duck_mini_v2/jump2.py
+
+diff --git a/playground/open_duck_mini_v2/getup.py b/playground/open_duck_mini_v2/getup.py
+index 04e0c95..a3c0f72 100644
+--- a/playground/open_duck_mini_v2/getup.py
++++ b/playground/open_duck_mini_v2/getup.py
+@@ -62,7 +62,8 @@ def default_config() -> config_dict.ConfigDict:
+         action_scale=1.0,
+         dof_vel_scale=0.05,
+         max_motor_velocity=5.24,  # rad/s
+-        init_mix=config_dict.create(fallen=0.6, mid_fall=0.2),  # rest = standing
++        init_mix=config_dict.create(fallen=0.6, mid_fall=0.2, back_share=0.0),  # rest = standing; back_share = part
++        # of the fallen starts drawn from the bank's on-the-back poses (0 = uniform over the bank)
+         noise_config=config_dict.create(
+             level=1.0,
+             action_min_delay=0,
+@@ -118,6 +119,8 @@ class Getup(open_duck_mini_v2_base.OpenDuckMiniV2Env):
+         bank = np.load(BANK_PATH)
+         assert bank["qpos"].shape[1] == self._mj_model.nq, "bank built for a different model"
+         self._bank_qpos = jp.array(bank["qpos"])
++        back = np.where(bank["cls"] == 2)[0]
++        self._bank_back_idx = jp.array(back if len(back) else np.arange(len(bank["cls"])))
+ 
+         self._floor_geom_id = self._mj_model.geom("floor").id
+         self._feet_geom_id = np.array([self._mj_model.geom(n).id for n in constants.FEET_GEOMS])
+@@ -135,12 +138,15 @@ class Getup(open_duck_mini_v2_base.OpenDuckMiniV2Env):
+ 
+     # ------------------------------------------------------------------ reset
+     def reset(self, rng: jax.Array) -> mjx_env.State:
+-        rng, k_mode, k_idx, k_yaw, k_noise, k_push, k_spin = jax.random.split(rng, 7)
++        rng, k_mode, k_idx, k_yaw, k_noise, k_push, k_spin, k_back, k_bidx = jax.random.split(rng, 9)
+         u = jax.random.uniform(k_mode)
+         mix = self._config.init_mix
+ 
+-        # Fallen: a settled drop from the bank, rotated to a random heading.
+-        qpos_fallen = self._bank_qpos[jax.random.randint(k_idx, (), 0, self._bank_qpos.shape[0])]
++        # Fallen: a settled drop from the bank, rotated to a random heading; back_share of them from back poses.
++        idx_any = jax.random.randint(k_idx, (), 0, self._bank_qpos.shape[0])
++        idx_back = self._bank_back_idx[jax.random.randint(k_bidx, (), 0, self._bank_back_idx.shape[0])]
++        idx = jp.where(jax.random.uniform(k_back) < mix.back_share, idx_back, idx_any)
++        qpos_fallen = self._bank_qpos[idx]
+         yaw = jax.random.uniform(k_yaw, (1,), minval=-jp.pi, maxval=jp.pi)
+         yaw_quat = math.axis_angle_to_quat(jp.array([0.0, 0.0, 1.0]), yaw)
+         qpos_fallen = qpos_fallen.at[3:7].set(math.quat_mul(yaw_quat, qpos_fallen[3:7]))
+@@ -299,7 +305,7 @@ class Getup(open_duck_mini_v2_base.OpenDuckMiniV2Env):
+         }
+ 
+ 
+-def make_randomizer(mj_model):
++def make_randomizer(mj_model, com_scale=1.0):
+     """Upstream's domain_randomize with the body/geom ids looked up by name. Upstream hardcodes FLOOR_GEOM_ID = 0
+     (a trunk mesh, so floor friction is never randomized) and TORSO_BODY_ID = 1 ('base', massless, so the CoM shift
+     does nothing and the +-0.1 kg can make its mass negative). Wrapped with floor-surface randomization (tile ...
+@@ -312,10 +318,16 @@ def make_randomizer(mj_model):
+     def domain_randomize(model, rng):
+         old = (randomize.FLOOR_GEOM_ID, randomize.TORSO_BODY_ID)
+         randomize.FLOOR_GEOM_ID, randomize.TORSO_BODY_ID = floor_id, torso_id
++        base_ipos = model.body_ipos[torso_id]
+         try:
+-            return randomize.domain_randomize(model, rng)
++            model, in_axes = randomize.domain_randomize(model, rng)
+         finally:
+             randomize.FLOOR_GEOM_ID, randomize.TORSO_BODY_ID = old
++        if com_scale != 1.0:  # shrink upstream's +-5 cm torso CoM shift (only real once the torso id is right)
++            shifted = model.body_ipos[:, torso_id]
++            model = model.tree_replace(
++                {"body_ipos": model.body_ipos.at[:, torso_id].set(base_ipos + (shifted - base_ipos) * com_scale)})
++        return model, in_axes
+ 
+     from playground.open_duck_mini_v2.surface_dr import add_surface_dr
+ 
+diff --git a/playground/open_duck_mini_v2/getup_back.py b/playground/open_duck_mini_v2/getup_back.py
+new file mode 100644
+index 0000000..ef2d4b4
+--- /dev/null
++++ b/playground/open_duck_mini_v2/getup_back.py
+@@ -0,0 +1,16 @@
++"""Get-up with half of the fallen starts on the back (to learn the back roll-over). Local addition."""
++
++from . import getup
++from .getup import PPO_OVERRIDES, make_randomizer  # noqa: F401
++
++
++def default_config():
++    cfg = getup.default_config()
++    cfg.init_mix.back_share = 0.5
++    return cfg
++
++
++class GetupBack(getup.Getup):
++    # runner.py builds env classes without a config, so the variant's config has to be the class default
++    def __init__(self, task="getup_backlash", config=None, config_overrides=None):
++        super().__init__(task=task, config=config or default_config(), config_overrides=config_overrides)
+diff --git a/playground/open_duck_mini_v2/joystick_sdr_com1cm.py b/playground/open_duck_mini_v2/joystick_sdr_com1cm.py
+new file mode 100644
+index 0000000..e85904b
+--- /dev/null
++++ b/playground/open_duck_mini_v2/joystick_sdr_com1cm.py
+@@ -0,0 +1,9 @@
++"""Walker v2 redo: joystick task + fixed DR ids + floor-surface DR, torso CoM shift +-1 cm instead of upstream's
+++-5 cm (which upstream never actually trained with, because it randomized the massless 'base' body). Local addition."""
++
++from .joystick import Joystick, default_config  # noqa: F401
++from . import getup
++
++
++def make_randomizer(mj_model):
++    return getup.make_randomizer(mj_model, com_scale=0.2)
+diff --git a/playground/open_duck_mini_v2/jump.py b/playground/open_duck_mini_v2/jump.py
+index b10b4d1..78432cd 100644
+--- a/playground/open_duck_mini_v2/jump.py
++++ b/playground/open_duck_mini_v2/jump.py
+@@ -70,6 +70,8 @@ def default_config() -> config_dict.ConfigDict:
+ class Jump(getup.Getup):
+     """Jump in place when triggered, land, and stand still."""
+ 
++    window_steps = WINDOW_STEPS
++
+     def __init__(
+         self,
+         task: str = "getup_backlash",
+@@ -148,7 +150,7 @@ class Jump(getup.Getup):
+ 
+     def _trigger(self, info):
+         since = info["step"] - info["trigger_step"]
+-        on = (since >= 0) & (since < WINDOW_STEPS)
++        on = (since >= 0) & (since < self.window_steps)
+         return on, since
+ 
+     def _get_obs(self, data: mjx.Data, info: dict[str, Any], contact: jax.Array) -> mjx_env.Observation:
+@@ -160,7 +162,7 @@ class Jump(getup.Getup):
+     def _get_reward(self, data, action, info, contact):
+         on, since = self._trigger(info)
+         on = on.astype(jp.float32)
+-        after = (since >= WINDOW_STEPS + 25).astype(jp.float32) + (since < 0).astype(jp.float32)  # settled phases
++        after = (since >= self.window_steps + 25).astype(jp.float32) + (since < 0).astype(jp.float32)  # settled phases
+         h = data.qpos[self._floating_base_qpos_addr + 2]
+         vz = data.qvel[self._floating_base_qvel_addr + 2]
+         airborne = (~contact.any()).astype(jp.float32)
+diff --git a/playground/open_duck_mini_v2/jump2.py b/playground/open_duck_mini_v2/jump2.py
+new file mode 100644
+index 0000000..602b6d0
+--- /dev/null
++++ b/playground/open_duck_mini_v2/jump2.py
+@@ -0,0 +1,55 @@
++"""In-place jump, crouch-then-push version. Local addition, not upstream.
++
++jump.py's policy learned to stretch up ~19 mm without leaving the floor. The open-loop bound (tools/feasibility_gifs.py)
++got 8-10 ms airborne only with a deep crouch followed by full extension, so this version shapes exactly that: a
++0.6 s trigger window whose first CROUCH_STEPS (0.24 s) pay for lowering the base up to 4 cm below standing, and whose
++remaining 0.36 s pay strongly for upward base speed, both soles off the floor and base height. Outside the window it
++is jump.py unchanged (stand still at home, no hopping, no drift, falls end the episode, reward clipped at 0).
++Second change vs jump.py: torso CoM randomization +-1 cm instead of +-5 cm (see make_randomizer).
++"""
++
++import jax.numpy as jp
++
++from . import jump
++from . import getup
++from .getup import STAND_HEIGHT
++
++PPO_OVERRIDES = jump.PPO_OVERRIDES
++CROUCH_STEPS = 12
++
++
++def make_randomizer(mj_model):
++    # +-1 cm torso CoM shift instead of the +-5 cm that jump.py/getup.py train with (upstream's range, which it never
++    # actually applied); a hop that is only a few mm high is not learnable under a ~4 cm CoM wobble.
++    return getup.make_randomizer(mj_model, com_scale=0.2)
++
++
++def default_config():
++    cfg = jump.default_config()
++    s = cfg.reward_config.scales
++    s.crouch = 5.0
++    s.up_vel = 20.0
++    s.air = 50.0
++    s.jump_height = 20.0
++    return cfg
++
++
++class Jump2(jump.Jump):
++    window_steps = 30
++
++    def __init__(self, task="getup_backlash", config=None, config_overrides=None):
++        super().__init__(task=task, config=config or default_config(), config_overrides=config_overrides)
++
++    def _get_reward(self, data, action, info, contact):
++        r = super()._get_reward(data, action, info, contact)
++        on, since = self._trigger(info)
++        crouch = (on & (since < CROUCH_STEPS)).astype(jp.float32)
++        push = (on & (since >= CROUCH_STEPS)).astype(jp.float32)
++        h = data.qpos[self._floating_base_qpos_addr + 2]
++        vz = data.qvel[self._floating_base_qvel_addr + 2]
++        airborne = (~contact.any()).astype(jp.float32)
++        r["crouch"] = crouch * jp.clip((STAND_HEIGHT - h) / 0.04, 0.0, 1.0)
++        r["up_vel"] = push * jp.clip(vz, 0.0, 1.0)
++        r["air"] = push * airborne
++        r["jump_height"] = push * jp.clip((h - 0.16) / 0.03, 0.0, 1.0)
++        return r
+diff --git a/playground/open_duck_mini_v2/runner.py b/playground/open_duck_mini_v2/runner.py
+index a7b8e44..addbe3d 100644
+--- a/playground/open_duck_mini_v2/runner.py
++++ b/playground/open_duck_mini_v2/runner.py
+@@ -5,6 +5,7 @@ import argparse
+ from playground.common import randomize
+ from playground.common.runner import BaseRunner
+ from playground.open_duck_mini_v2 import joystick, standing, getup, jump, joystick_sdr
++from playground.open_duck_mini_v2 import getup_back, joystick_sdr_com1cm, jump2
+ 
+ 
+ class OpenDuckMiniV2Runner(BaseRunner):
+@@ -17,6 +18,9 @@ class OpenDuckMiniV2Runner(BaseRunner):
+             "getup": (getup, getup.Getup),
+             "jump": (jump, jump.Jump),
+             "joystick_sdr": (joystick_sdr, joystick_sdr.Joystick),
++            "getup_back": (getup_back, getup_back.GetupBack),
++            "joystick_sdr_com1cm": (joystick_sdr_com1cm, joystick_sdr_com1cm.Joystick),
++            "jump2": (jump2, jump2.Jump2),
+         }
+         if args.env not in available_envs:
+             raise ValueError(f"Unknown env {args.env}")
+-- 
+2.50.1
+

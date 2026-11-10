@@ -1,0 +1,78 @@
+From d3a65ccc403f3c6f14dcad0fcfa679ee671d940b Mon Sep 17 00:00:00 2001
+From: Dhawal Kabra <dk5426@nyu.edu>
+Date: Fri, 30 Oct 2026 14:41:48 -0400
+Subject: [PATCH 7/9] getup_back3: roll_front reward toward the belly while not
+ upright
+---
+ playground/open_duck_mini_v2/getup_back3.py | 37 +++++++++++++++++++++
+ playground/open_duck_mini_v2/runner.py      |  3 +-
+ 2 files changed, 39 insertions(+), 1 deletion(-)
+ create mode 100644 playground/open_duck_mini_v2/getup_back3.py
+
+diff --git a/playground/open_duck_mini_v2/getup_back3.py b/playground/open_duck_mini_v2/getup_back3.py
+new file mode 100644
+index 0000000..0d7af63
+--- /dev/null
++++ b/playground/open_duck_mini_v2/getup_back3.py
+@@ -0,0 +1,37 @@
++"""Get-up, round 3 of the back roll-over. Local addition.
++
++getup_back2 (upright-gated height, feet_under, stuck-pose starts) stopped the nose-up pose but at 50M it lies still on
++its back (0/8 back starts): nothing pays the start of a roll, and lying still saves the motion costs. Front starts
++are solved (16/16), so round 3 pays rolling toward the belly while not upright:
++- roll_front = (1 - fwd_z) / 2 * (1 - max(up, 0)), with fwd_z the base body's forward axis (+1 on the back, -1 on the
++  belly, same test as make_getup_bank.classify) and up the trunk uprightness. 0 lying on the back, 0.5 on a side, 1 on
++  the belly, fading out as the trunk comes upright (standing earns it through the other terms, ~15/step vs 2 here).
++Everything else as getup_back2.
++"""
++
++import jax.numpy as jp
++
++from . import getup_back2
++from .getup import PPO_OVERRIDES, make_randomizer  # noqa: F401
++
++
++def default_config():
++    cfg = getup_back2.default_config()
++    cfg.reward_config.scales.roll_front = 2.0
++    return cfg
++
++
++class GetupBack3(getup_back2.GetupBack2):
++    def __init__(self, task="getup_backlash", config=None, config_overrides=None):
++        super().__init__(task=task, config=config or default_config(), config_overrides=config_overrides)
++
++    def _post_init(self) -> None:
++        super()._post_init()
++        self._base_body_id = self._mj_model.body("base").id
++
++    def _get_reward(self, data, action, info):
++        r = super()._get_reward(data, action, info)
++        fwd_z = data.xmat[self._base_body_id][2, 0]
++        up = jp.maximum(self.get_gravity(data)[-1], 0.0)
++        r["roll_front"] = (1.0 - fwd_z) / 2.0 * (1.0 - up)
++        return r
+diff --git a/playground/open_duck_mini_v2/runner.py b/playground/open_duck_mini_v2/runner.py
+index 8abfc2f..ab9f638 100644
+--- a/playground/open_duck_mini_v2/runner.py
++++ b/playground/open_duck_mini_v2/runner.py
+@@ -5,7 +5,7 @@ import argparse
+ from playground.common import randomize
+ from playground.common.runner import BaseRunner
+ from playground.open_duck_mini_v2 import joystick, standing, getup, jump, joystick_sdr
+-from playground.open_duck_mini_v2 import getup_back, getup_back2, joystick_sdr_com1cm, jump2
++from playground.open_duck_mini_v2 import getup_back, getup_back2, getup_back3, joystick_sdr_com1cm, jump2
+ 
+ 
+ class OpenDuckMiniV2Runner(BaseRunner):
+@@ -22,6 +22,7 @@ class OpenDuckMiniV2Runner(BaseRunner):
+             "joystick_sdr_com1cm": (joystick_sdr_com1cm, joystick_sdr_com1cm.Joystick),
+             "jump2": (jump2, jump2.Jump2),
+             "getup_back2": (getup_back2, getup_back2.GetupBack2),
++            "getup_back3": (getup_back3, getup_back3.GetupBack3),
+         }
+         if args.env not in available_envs:
+             raise ValueError(f"Unknown env {args.env}")
+-- 
+2.50.1
+

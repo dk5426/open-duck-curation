@@ -1,0 +1,175 @@
+diff -ru original_installed/scripts/v2_rl_walk_mujoco.py patched/scripts/v2_rl_walk_mujoco.py
+--- original_installed/scripts/v2_rl_walk_mujoco.py	2026-10-30 12:02:47
++++ patched/scripts/v2_rl_walk_mujoco.py	2026-10-30 12:03:39
+@@ -124,6 +124,18 @@
+             self.duck_config.phase_frequency_factor_offset
+         )
+ 
++        # Get-up skill (2026-10-30): a second ONNX policy, started by a button press when the duck has fallen.
++        self.getup_button_index = int(os.environ.get("DUCK_GETUP_BUTTON_INDEX", "11"))  # Menu on this pad (verify)
++        self.getup_active = False
++        self.getup_policy = None
++        getup_path = os.environ.get("DUCK_GETUP_ONNX_MODEL", os.path.join(REPO_DIR, "getup.onnx"))
++        if os.path.exists(getup_path):
++            self.getup_policy = OnnxInfer(getup_path, awd=True)
++            print(f"[GETUP] policy loaded: {getup_path}; button index {self.getup_button_index}")
++        else:
++            print(f"[GETUP] no get-up policy at {getup_path}; get-up button disabled")
++        self._getup_button_was_pressed = False
++
+         print("[START] sensors and controller ready; moving to the start pose")
+         self.start()
+ 
+@@ -333,6 +345,9 @@
+         pressed, sampled_at = controller.get_raw_button_sample(self.reset_button_index)
+         fresh = sampled_at and time.monotonic() - sampled_at < 0.5
+         if pressed and fresh and not self.resetting:
++            if self.getup_active:
++                self.getup_active = False
++                print("[GETUP] cancelled by the reset button", flush=True)
+             self.resetting = True
+             self.paused = True
+             print("[RESET] going soft at the home pose; set the duck upright, then release the button", flush=True)
+@@ -349,6 +364,111 @@
+                       "check them before walking", flush=True)
+             print("[RESET] at the home pose, paused; press A to start the policy", flush=True)
+ 
++    # ------------------------------------------------------------------ get-up skill
++    # Joint limits and speed limit of the training model (Open_Duck_Playground open_duck_mini_v2, actuator ctrlrange),
++    # in the HWI joint order: left leg (5), neck_pitch, head_pitch, head_yaw, head_roll, right leg (5).
++    GETUP_LO = np.array([-0.52, -0.44, -1.22, -1.57, -1.57, -0.35, -0.79, -2.79, -0.52, -0.52, -0.44, -0.52, -1.57, -1.57])
++    GETUP_HI = np.array([0.52, 0.44, 0.52, 1.57, 1.57, 1.13, 0.79, 2.79, 0.52, 0.52, 0.44, 1.22, 1.57, 1.57])
++    GETUP_ACTION_SCALE = 1.0  # getup.py trains at 1.0 (the walker uses 0.25 / 0.2)
++    GETUP_MAX_VEL = 5.24  # rad/s, as in training
++    GETUP_TIMEOUT_S = 10.0
++    GETUP_STAND_S = 1.0
++    GETUP_SETTLE_STEPS = 25
++
++    def _check_getup_button(self):
++        controller = self.command_controller
++        if controller is None or not hasattr(controller, "get_raw_button_sample"):
++            return
++        pressed, sampled_at = controller.get_raw_button_sample(self.getup_button_index)
++        fresh = sampled_at and time.monotonic() - sampled_at < 0.5
++        rising = pressed and fresh and not self._getup_button_was_pressed
++        self._getup_button_was_pressed = bool(pressed and fresh)
++        if not rising or self.getup_active or self.resetting or self.shutdown_requested:
++            return
++        if self.getup_policy is None:
++            print("[GETUP] no get-up policy loaded", flush=True)
++            return
++        self._getup_start()
++
++    def _read_joints(self):
++        pos = self.hwi.get_present_positions(ignore=["left_antenna", "right_antenna"])
++        vel = self.hwi.get_present_velocities(ignore=["left_antenna", "right_antenna"])
++        if pos is None or vel is None or len(pos) != self.num_dofs or len(vel) != self.num_dofs:
++            return None, None
++        return np.array(pos), np.array(vel)
++
++    def _getup_start(self):
++        pos, _ = self._read_joints()
++        if pos is None:
++            print("[GETUP] cannot read joints; not starting", flush=True)
++            return
++        self.g_home = np.array(self.init_pos)
++        self.g_a1 = np.zeros(self.num_dofs)
++        self.g_a2 = np.zeros(self.num_dofs)
++        self.g_a3 = np.zeros(self.num_dofs)
++        self.g_targets = np.clip(pos, self.GETUP_LO, self.GETUP_HI)
++        self.g_t0 = time.monotonic()
++        self.g_up_since = None
++        self.g_settle = None
++        self.getup_active = True
++        print("[GETUP] start: get-up policy has the motors (A aborts, hold RB to reset by hand)", flush=True)
++
++    def _getup_obs(self, pos, vel):
++        """Same 92 numbers as getup.py: gyro, accelerometer, joint pos - home, 0.05 x joint vel, last 3 actions, motor
++        targets, foot contacts. The walker's IMU filter is NOT used here: it freezes the accelerometer whenever an axis
++        reads > 9.8 m/s^2, which is most of the time on the floor, where gravity lies along x or y."""
++        imu = self.imu.get_data()
++        gyro = np.clip(np.asarray(imu["gyro"], dtype=float), -20, 20)
++        acc = np.clip(np.asarray(imu["accelero"], dtype=float), -30, 30)
++        contacts = np.asarray(self.feet_contacts.get(), dtype=float)
++        obs = np.concatenate([gyro, acc, pos - self.g_home, vel * 0.05, self.g_a1, self.g_a2, self.g_a3,
++                              self.g_targets, contacts]).astype(np.float32)
++        return obs, acc
++
++    def _getup_step(self):
++        pos, vel = self._read_joints()
++        if pos is None:
++            return
++        if self.g_settle is not None:
++            # upright: blend from where the policy left the joints to the home pose, then hand back paused
++            k = self.g_settle + 1
++            tgt = self.g_settle_from + (self.g_home - self.g_settle_from) * k / self.GETUP_SETTLE_STEPS
++            self.hwi.set_position_all(make_action_dict(tgt, list(self.hwi.joints.keys())))
++            self.g_settle = k
++            if k >= self.GETUP_SETTLE_STEPS:
++                self._getup_finish("standing at the home pose, paused; press A to walk", success=True)
++            return
++        obs, acc = self._getup_obs(pos, vel)
++        a = self.getup_policy.infer(obs)
++        self.g_a3, self.g_a2, self.g_a1 = self.g_a2, self.g_a1, np.asarray(a, dtype=float)
++        tgt = np.clip(self.g_home + self.GETUP_ACTION_SCALE * self.g_a1, self.GETUP_LO, self.GETUP_HI)
++        lim = self.GETUP_MAX_VEL / self.control_freq
++        tgt = np.clip(tgt, self.g_targets - lim, self.g_targets + lim)
++        self.g_targets = tgt
++        self.hwi.set_position_all(make_action_dict(tgt, list(self.hwi.joints.keys())))
++
++        now = time.monotonic()
++        up = acc[2] / max(np.linalg.norm(acc), 1e-6)
++        legs = np.r_[0:5, 9:14]
++        standing = up > 0.85 and np.max(np.abs(pos[legs] - self.g_home[legs])) < 0.35
++        if standing:
++            self.g_up_since = self.g_up_since or now
++            if now - self.g_up_since >= self.GETUP_STAND_S:
++                self.g_settle, self.g_settle_from = 0, tgt.copy()
++                print("[GETUP] upright; settling into the home pose", flush=True)
++        else:
++            self.g_up_since = None
++        if now - self.g_t0 > self.GETUP_TIMEOUT_S and self.g_settle is None:
++            self._getup_finish(f"not standing after {self.GETUP_TIMEOUT_S:g} s; holding still, paused "
++                               "(press the get-up button to retry, or hold RB to reset by hand)", success=False)
++
++    def _getup_finish(self, message, success):
++        self.getup_active = False
++        self.paused = True
++        if success:
++            self._reset_policy_state()
++        print(f"[GETUP] {message}", flush=True)
++
+     def _check_controller_shutdown(self):
+         controller = self.command_controller
+         if controller is None or not hasattr(controller, "get_raw_button_sample"):
+@@ -385,6 +505,7 @@
+                     if self._check_controller_shutdown():
+                         break
+                     self._check_reset_button()
++                    self._check_getup_button()
+                     # if i % 20 == 0:
+                     #     print(f"[CMD] lin_x={self.last_commands[0]:.3f}, lin_y={self.last_commands[1]:.3f}, yaw={self.last_commands[2]:.3f}")
+ 
+@@ -426,6 +547,8 @@
+ 
+                     if self.buttons.A.triggered and self.resetting:
+                         print("[RESET] release RB first; A ignored while the duck is soft")
++                    elif self.buttons.A.triggered and self.getup_active:
++                        self._getup_finish("aborted with A; holding still, paused", success=False)
+                     elif self.buttons.A.triggered:
+                         self.paused = not self.paused
+                         if self.paused:
+@@ -440,6 +563,13 @@
+                     )
+                     if not self.check_motor_voltage(log_power=log_power):
+                         break
++
++                if self.getup_active:
++                    self._getup_step()
++                    i += 1
++                    took = time.time() - t
++                    time.sleep(max(0, 1 / self.control_freq - took))
++                    continue
+ 
+                 if self.paused:
+                     time.sleep(0.1)

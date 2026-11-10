@@ -1,0 +1,58 @@
+--- original_installed/scripts/v2_rl_walk_mujoco.py	2026-10-30 14:51:25
++++ patched/scripts/v2_rl_walk_mujoco.py	2026-10-30 14:51:37
+@@ -154,6 +154,21 @@
+         self.onnx_model_path = onnx_model_path
+         self.policy = OnnxInfer(self.onnx_model_path, awd=True)
+ 
++        # Walker switch (2026-10-30): a second walker, swapped in with a button while paused. Both walkers take the
++        # same 101 inputs and give 14 outputs at the same action scale.
++        self.walker_switch_index = int(os.environ.get("DUCK_WALKER_SWITCH_BUTTON_INDEX", "10"))  # View on this pad
++        alt = os.environ.get("DUCK_ALT_ONNX_MODEL", "BEST_WALK_ONNX_2.onnx")
++        alt_path = alt if os.path.isabs(alt) or os.path.exists(alt) else os.path.join(REPO_DIR, alt)
++        self.walkers = [(os.path.basename(self.onnx_model_path), self.policy)]
++        if os.path.exists(alt_path) and os.path.abspath(alt_path) != os.path.abspath(self.onnx_model_path):
++            self.walkers.append((os.path.basename(alt_path), OnnxInfer(alt_path, awd=True)))
++            print(f"[WALKER] {self.walkers[0][0]} active; {self.walkers[1][0]} on button {self.walker_switch_index} "
++                  "(while paused)", flush=True)
++        else:
++            print(f"[WALKER] no second walker at {alt_path}; walker switch disabled", flush=True)
++        self.walker_i = 0
++        self._walker_button_was_pressed = False
++
+         self.num_dofs = 14
+         self.max_motor_velocity = 5.24  # rad/s
+ 
+@@ -431,6 +446,25 @@
+ 
+         return freq
+ 
++    def _check_walker_button(self):
++        controller = self.command_controller
++        if controller is None or not hasattr(controller, "get_raw_button_sample"):
++            return
++        pressed, sampled_at = controller.get_raw_button_sample(self.walker_switch_index)
++        fresh = sampled_at and time.monotonic() - sampled_at < 0.5
++        rising = pressed and fresh and not self._walker_button_was_pressed
++        self._walker_button_was_pressed = bool(pressed and fresh)
++        if not rising or len(self.walkers) < 2:
++            return
++        if not self.paused or self.getup_active or self.resetting:
++            print("[WALKER] pause first (A); the walker only switches while paused", flush=True)
++            return
++        self.walker_i = (self.walker_i + 1) % len(self.walkers)
++        name, self.policy = self.walkers[self.walker_i]
++        self._reset_policy_state()  # the new walker starts from a fresh history, like a fresh start
++        self.rec.meta["walker_onnx"] = name
++        print(f"[WALKER] switched to {name}; press A to walk", flush=True)
++
+     def _reset_policy_state(self):
+         """Same state as a fresh start: no action history, targets at the start pose, gait phase at 0."""
+         self.last_action = np.zeros(self.num_dofs)
+@@ -647,6 +681,7 @@
+                         break
+                     self._check_reset_button()
+                     self._check_getup_button()
++                    self._check_walker_button()
+                     # if i % 20 == 0:
+                     #     print(f"[CMD] lin_x={self.last_commands[0]:.3f}, lin_y={self.last_commands[1]:.3f}, yaw={self.last_commands[2]:.3f}")
+ 

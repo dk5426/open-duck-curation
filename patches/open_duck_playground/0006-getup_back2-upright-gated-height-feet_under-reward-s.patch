@@ -1,0 +1,109 @@
+From d3fba540b4869e44524806095ebbc22bdad801cf Mon Sep 17 00:00:00 2001
+From: Dhawal Kabra <dk5426@nyu.edu>
+Date: Fri, 30 Oct 2026 13:28:43 -0400
+Subject: [PATCH 6/9] getup_back2: upright-gated height, feet_under reward,
+ stuck-pose starts
+---
+ playground/open_duck_mini_v2/getup_back2.py | 68 +++++++++++++++++++++
+ playground/open_duck_mini_v2/runner.py      |  3 +-
+ 2 files changed, 70 insertions(+), 1 deletion(-)
+ create mode 100644 playground/open_duck_mini_v2/getup_back2.py
+
+diff --git a/playground/open_duck_mini_v2/getup_back2.py b/playground/open_duck_mini_v2/getup_back2.py
+new file mode 100644
+index 0000000..c981de9
+--- /dev/null
++++ b/playground/open_duck_mini_v2/getup_back2.py
+@@ -0,0 +1,68 @@
++"""Get-up, round 2 of the back roll-over. Local addition.
++
++getup_back (back_share 0.5) at 108M stands from 1/8 back starts. The other back starts end on their feet at full
++standing height with the trunk pitched back ~90 deg (nose up, upvector z ~ -0.07): that pose collects the whole height
++reward, because height does not care which way the trunk points. Changes on top of GetupBack:
++- height and feet_under are paid only in proportion to max(trunk up, 0): the nose-up pose earns neither.
++- feet_under: both soles on the floor and the whole-robot CoM over the midpoint between them (exp(-(d / 4 cm)^2)).
++- 30% of the fallen starts come from the stuck poses the 108M policy ends in (tools/make_sitting_bank.py ->
++  data/getup_sit_bank.npz), so it practises the way out directly.
++"""
++
++import jax
++import jax.numpy as jp
++import numpy as np
++
++from . import getup
++from .getup import PPO_OVERRIDES, make_randomizer  # noqa: F401
++
++SIT_BANK_PATH = "playground/open_duck_mini_v2/data/getup_sit_bank.npz"
++FEET_SIGMA = 0.04  # m
++
++
++def default_config():
++    cfg = getup.default_config()
++    cfg.init_mix.back_share = 0.5
++    cfg.init_mix.sit_share = 0.3  # of the fallen starts
++    cfg.reward_config.scales.feet_under = 3.0
++    return cfg
++
++
++class GetupBack2(getup.Getup):
++    def __init__(self, task="getup_backlash", config=None, config_overrides=None):
++        super().__init__(task=task, config=config or default_config(), config_overrides=config_overrides)
++
++    def _post_init(self) -> None:
++        super()._post_init()
++        sit = np.load(SIT_BANK_PATH)["qpos"]
++        assert sit.shape[1] == self._mj_model.nq, "sitting bank built for a different model"
++        self._sit_qpos = jp.array(sit)
++        self._feet_site_id = np.array([self._mj_model.site(n).id for n in getup.constants.FEET_SITES])
++        self._root_body_id = int(self._mj_model.body("trunk_assembly").rootid[0])
++
++    def reset(self, rng):
++        rng, k_sit, k_idx, k_yaw = jax.random.split(rng, 4)
++        state = super().reset(rng)
++        # replace a share of the fallen starts with a stuck-sitting pose at a random heading
++        use_sit = (state.info["start_fallen"] > 0) & (jax.random.uniform(k_sit) < self._config.init_mix.sit_share)
++        q = self._sit_qpos[jax.random.randint(k_idx, (), 0, self._sit_qpos.shape[0])]
++        yaw = jax.random.uniform(k_yaw, (1,), minval=-jp.pi, maxval=jp.pi)
++        yaw_quat = getup.math.axis_angle_to_quat(jp.array([0.0, 0.0, 1.0]), yaw)
++        q = q.at[3:7].set(getup.math.quat_mul(yaw_quat, q[3:7]))
++        qpos = jp.where(use_sit, q, state.data.qpos)
++        ctrl = jp.clip(self.get_actuator_joints_qpos(qpos), self._ctrl_lo, self._ctrl_hi)
++        data = getup.mjx_env.init(self.mjx_model, qpos=qpos, qvel=state.data.qvel * (1 - use_sit), ctrl=ctrl)
++        state.info["motor_targets"] = ctrl
++        contact = self._feet_contact(data)
++        return state.replace(data=data, obs=self._get_obs(data, state.info, contact))
++
++    def _get_reward(self, data, action, info):
++        r = super()._get_reward(data, action, info)
++        up = jp.maximum(self.get_gravity(data)[-1], 0.0)
++        r["height"] = r["height"] * up
++        feet = data.site_xpos[self._feet_site_id]
++        com = data.subtree_com[self._root_body_id]
++        d = jp.linalg.norm(com[:2] - jp.mean(feet[:, :2], axis=0))
++        both = jp.all(self._feet_contact(data))
++        r["feet_under"] = up * both * jp.exp(-jp.square(d / FEET_SIGMA))
++        return r
+diff --git a/playground/open_duck_mini_v2/runner.py b/playground/open_duck_mini_v2/runner.py
+index addbe3d..8abfc2f 100644
+--- a/playground/open_duck_mini_v2/runner.py
++++ b/playground/open_duck_mini_v2/runner.py
+@@ -5,7 +5,7 @@ import argparse
+ from playground.common import randomize
+ from playground.common.runner import BaseRunner
+ from playground.open_duck_mini_v2 import joystick, standing, getup, jump, joystick_sdr
+-from playground.open_duck_mini_v2 import getup_back, joystick_sdr_com1cm, jump2
++from playground.open_duck_mini_v2 import getup_back, getup_back2, joystick_sdr_com1cm, jump2
+ 
+ 
+ class OpenDuckMiniV2Runner(BaseRunner):
+@@ -21,6 +21,7 @@ class OpenDuckMiniV2Runner(BaseRunner):
+             "getup_back": (getup_back, getup_back.GetupBack),
+             "joystick_sdr_com1cm": (joystick_sdr_com1cm, joystick_sdr_com1cm.Joystick),
+             "jump2": (jump2, jump2.Jump2),
++            "getup_back2": (getup_back2, getup_back2.GetupBack2),
+         }
+         if args.env not in available_envs:
+             raise ValueError(f"Unknown env {args.env}")
+-- 
+2.50.1
+

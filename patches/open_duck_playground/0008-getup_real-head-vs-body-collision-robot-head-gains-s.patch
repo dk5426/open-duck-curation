@@ -1,0 +1,113 @@
+From cf02c0c9e34c90d1f0d6342e38006e021f522c7a Mon Sep 17 00:00:00 2001
+From: Dhawal Kabra <dk5426@nyu.edu>
+Date: Fri, 30 Oct 2026 15:46:44 -0400
+Subject: [PATCH 8/9] getup_real: head-vs-body collision, robot head gains,
+ servo torque DR
+---
+ playground/open_duck_mini_v2/getup_real.py | 72 ++++++++++++++++++++++
+ playground/open_duck_mini_v2/runner.py     |  3 +-
+ 2 files changed, 74 insertions(+), 1 deletion(-)
+ create mode 100644 playground/open_duck_mini_v2/getup_real.py
+
+diff --git a/playground/open_duck_mini_v2/getup_real.py b/playground/open_duck_mini_v2/getup_real.py
+new file mode 100644
+index 0000000..988cc9b
+--- /dev/null
++++ b/playground/open_duck_mini_v2/getup_real.py
+@@ -0,0 +1,72 @@
++"""Get-up closer to the real robot. Local addition.
++
++getup_back2 at 101M stands from every start in sim (40/40) and from all 13 recorded robot starts, but from 0 of 12 on
++the robot (2026-10-30). The owner saw the head pushing the body up in sim but getting stuck under the torso on the
++robot. Replaying the 13 robot starts in sim (tools/getup_replay.py): with head-vs-body collision on, 13/13 -> 8/13;
++with the robot's head gains (8 vs 22 on the legs) and 50% servo torque on top, 3/13. Three changes on getup_back2:
++
++- head-vs-body collision: the head/neck boxes collide with the trunk and leg boxes (in getup_back2 the body boxes
++  only collide with the floor, so the head could pass through the torso). Head-head and leg-leg pairs stay off.
++- head/neck actuator gains at the robot's ratio, 8/22 of the legs (runtime: kp 22 legs, 8 head).
++- servo strength randomization: each env's torque limits x U(0.5, 1.0) (voltage sag, servo overload protection).
++"""
++
++import jax
++import jax.numpy as jp
++import numpy as np
++from mujoco import mjx
++
++from . import getup_back2
++from .getup import PPO_OVERRIDES  # noqa: F401
++from .getup import make_randomizer as _getup_randomizer
++
++HEAD_ACTUATORS = ["neck_pitch", "head_pitch", "head_yaw", "head_roll"]
++HEAD_BOXES = ["col_neck_pitch_assembly", "col_head_pitch_to_yaw", "col_neck_yaw_assembly", "col_head_assembly"]
++HEAD_KP_RATIO = 8.0 / 22.0
++TORQUE_RANGE = (0.5, 1.0)
++SELF_BIT = 4
++
++
++def default_config():
++    return getup_back2.default_config()
++
++
++def make_real_model(mj_model):
++    """Head-vs-body collision and robot head gains, in place on an MjModel."""
++    head = [mj_model.geom(n).id for n in HEAD_BOXES]
++    body = [g for g in range(mj_model.ngeom) if mj_model.geom(g).name.startswith("col_") and g not in head]
++    for g in head:
++        mj_model.geom_contype[g] |= SELF_BIT
++        mj_model.body_contype[mj_model.geom_bodyid[g]] |= SELF_BIT
++    for g in body:
++        mj_model.geom_conaffinity[g] |= SELF_BIT
++        mj_model.body_conaffinity[mj_model.geom_bodyid[g]] |= SELF_BIT
++    for n in HEAD_ACTUATORS:
++        a = mj_model.actuator(n).id
++        mj_model.actuator_gainprm[a, 0] *= HEAD_KP_RATIO
++        mj_model.actuator_biasprm[a, 1] *= HEAD_KP_RATIO
++    return mj_model
++
++
++class GetupReal(getup_back2.GetupBack2):
++    def __init__(self, task="getup_backlash", config=None, config_overrides=None):
++        super().__init__(task=task, config=config or default_config(), config_overrides=config_overrides)
++        make_real_model(self._mj_model)
++        self._mjx_model = mjx.put_model(self._mj_model)
++
++
++def make_randomizer(mj_model, com_scale=1.0):
++    """getup's randomizer (upstream DR with ids by name + floor surfaces) plus servo strength x U(TORQUE_RANGE)."""
++    base = _getup_randomizer(mj_model, com_scale)
++
++    def domain_randomize(model, rng):
++        model, in_axes = base(model, rng)
++        keys = jax.vmap(lambda k: jax.random.fold_in(k, 0x7A0))(rng)
++        scale = jax.vmap(lambda k: jax.random.uniform(k, minval=TORQUE_RANGE[0], maxval=TORQUE_RANGE[1]))(keys)
++        forcerange = model.actuator_forcerange[None] * scale[:, None, None] if model.actuator_forcerange.ndim == 2 \
++            else model.actuator_forcerange * scale[:, None, None]
++        model = model.tree_replace({"actuator_forcerange": forcerange})
++        in_axes = in_axes.tree_replace({"actuator_forcerange": 0})
++        return model, in_axes
++
++    return domain_randomize
+diff --git a/playground/open_duck_mini_v2/runner.py b/playground/open_duck_mini_v2/runner.py
+index ab9f638..b9623fc 100644
+--- a/playground/open_duck_mini_v2/runner.py
++++ b/playground/open_duck_mini_v2/runner.py
+@@ -5,7 +5,7 @@ import argparse
+ from playground.common import randomize
+ from playground.common.runner import BaseRunner
+ from playground.open_duck_mini_v2 import joystick, standing, getup, jump, joystick_sdr
+-from playground.open_duck_mini_v2 import getup_back, getup_back2, getup_back3, joystick_sdr_com1cm, jump2
++from playground.open_duck_mini_v2 import getup_back, getup_back2, getup_back3, getup_real, joystick_sdr_com1cm, jump2
+ 
+ 
+ class OpenDuckMiniV2Runner(BaseRunner):
+@@ -23,6 +23,7 @@ class OpenDuckMiniV2Runner(BaseRunner):
+             "jump2": (jump2, jump2.Jump2),
+             "getup_back2": (getup_back2, getup_back2.GetupBack2),
+             "getup_back3": (getup_back3, getup_back3.GetupBack3),
++            "getup_real": (getup_real, getup_real.GetupReal),
+         }
+         if args.env not in available_envs:
+             raise ValueError(f"Unknown env {args.env}")
+-- 
+2.50.1
+

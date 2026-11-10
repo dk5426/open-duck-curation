@@ -1,0 +1,106 @@
+From 2d880b19292aa1c80e6c92346cf1f4ebd90ce64f Mon Sep 17 00:00:00 2001
+From: Dhawal Kabra <dk5426@nyu.edu>
+Date: Mon, 2 Nov 2026 14:08:48 -0500
+Subject: [PATCH 9/9] getup_real2: start-state bank v2, servo strength 0.4-0.8
+---
+ playground/open_duck_mini_v2/getup_real.py  |  6 +--
+ playground/open_duck_mini_v2/getup_real2.py | 43 +++++++++++++++++++++
+ playground/open_duck_mini_v2/runner.py      |  3 +-
+ 3 files changed, 48 insertions(+), 4 deletions(-)
+ create mode 100644 playground/open_duck_mini_v2/getup_real2.py
+
+diff --git a/playground/open_duck_mini_v2/getup_real.py b/playground/open_duck_mini_v2/getup_real.py
+index 988cc9b..566b359 100644
+--- a/playground/open_duck_mini_v2/getup_real.py
++++ b/playground/open_duck_mini_v2/getup_real.py
+@@ -55,14 +55,14 @@ class GetupReal(getup_back2.GetupBack2):
+         self._mjx_model = mjx.put_model(self._mj_model)
+ 
+ 
+-def make_randomizer(mj_model, com_scale=1.0):
+-    """getup's randomizer (upstream DR with ids by name + floor surfaces) plus servo strength x U(TORQUE_RANGE)."""
++def make_randomizer(mj_model, com_scale=1.0, torque_range=TORQUE_RANGE):
++    """getup's randomizer (upstream DR with ids by name + floor surfaces) plus servo strength x U(torque_range)."""
+     base = _getup_randomizer(mj_model, com_scale)
+ 
+     def domain_randomize(model, rng):
+         model, in_axes = base(model, rng)
+         keys = jax.vmap(lambda k: jax.random.fold_in(k, 0x7A0))(rng)
+-        scale = jax.vmap(lambda k: jax.random.uniform(k, minval=TORQUE_RANGE[0], maxval=TORQUE_RANGE[1]))(keys)
++        scale = jax.vmap(lambda k: jax.random.uniform(k, minval=torque_range[0], maxval=torque_range[1]))(keys)
+         forcerange = model.actuator_forcerange[None] * scale[:, None, None] if model.actuator_forcerange.ndim == 2 \
+             else model.actuator_forcerange * scale[:, None, None]
+         model = model.tree_replace({"actuator_forcerange": forcerange})
+diff --git a/playground/open_duck_mini_v2/getup_real2.py b/playground/open_duck_mini_v2/getup_real2.py
+new file mode 100644
+index 0000000..89c1421
+--- /dev/null
++++ b/playground/open_duck_mini_v2/getup_real2.py
+@@ -0,0 +1,43 @@
++"""getup_real with more varied fallen starts (owner 2026-11-02). Local addition.
++
++The fallen starts come from start-state bank v2 (tools/make_getup_bank_v2.py -> data/getup_init_bank_v2.npz):
++random drops over the full joint range with spin, limp drops (servos nearly soft), falls of the walker kicked while
++walking, and the recorded robot starts with joint noise. Half of the bank draws are still from on-the-back poses
++(back_share 0.5). The stuck-pose starts of getup_back2 drop from 30% to 15% of the fallen starts. Servo strength is
++x U(0.4, 0.8) instead of getup_real's U(0.5, 1.0). Head-vs-body collision and robot head gains as getup_real.
++"""
++
++import jax.numpy as jp
++import numpy as np
++
++from . import getup_real
++from .getup import PPO_OVERRIDES  # noqa: F401
++
++
++BANK_V2_PATH = "playground/open_duck_mini_v2/data/getup_init_bank_v2.npz"
++# Owner 2026-11-02: on the robot the get-up only works when the main push comes out strong, and in sim the policy is
++# marginal at 50-70% servo strength; train with weak servos as the norm (getup_real: 0.5-1.0).
++TORQUE_RANGE = (0.4, 0.8)
++
++
++def make_randomizer(mj_model, com_scale=1.0):
++    return getup_real.make_randomizer(mj_model, com_scale, torque_range=TORQUE_RANGE)
++
++
++def default_config():
++    cfg = getup_real.default_config()
++    cfg.init_mix.sit_share = 0.15
++    return cfg
++
++
++class GetupReal2(getup_real.GetupReal):
++    def __init__(self, task="getup_backlash", config=None, config_overrides=None):
++        super().__init__(task=task, config=config or default_config(), config_overrides=config_overrides)
++
++    def _post_init(self) -> None:
++        super()._post_init()
++        bank = np.load(BANK_V2_PATH)
++        assert bank["qpos"].shape[1] == self._mj_model.nq, "bank v2 built for a different model"
++        self._bank_qpos = jp.array(bank["qpos"])
++        back = np.where(bank["cls"] == 2)[0]
++        self._bank_back_idx = jp.array(back if len(back) else np.arange(len(bank["cls"])))
+diff --git a/playground/open_duck_mini_v2/runner.py b/playground/open_duck_mini_v2/runner.py
+index b9623fc..66eeaa6 100644
+--- a/playground/open_duck_mini_v2/runner.py
++++ b/playground/open_duck_mini_v2/runner.py
+@@ -5,7 +5,7 @@ import argparse
+ from playground.common import randomize
+ from playground.common.runner import BaseRunner
+ from playground.open_duck_mini_v2 import joystick, standing, getup, jump, joystick_sdr
+-from playground.open_duck_mini_v2 import getup_back, getup_back2, getup_back3, getup_real, joystick_sdr_com1cm, jump2
++from playground.open_duck_mini_v2 import getup_back, getup_back2, getup_back3, getup_real, getup_real2, joystick_sdr_com1cm, jump2
+ 
+ 
+ class OpenDuckMiniV2Runner(BaseRunner):
+@@ -24,6 +24,7 @@ class OpenDuckMiniV2Runner(BaseRunner):
+             "getup_back2": (getup_back2, getup_back2.GetupBack2),
+             "getup_back3": (getup_back3, getup_back3.GetupBack3),
+             "getup_real": (getup_real, getup_real.GetupReal),
++            "getup_real2": (getup_real2, getup_real2.GetupReal2),
+         }
+         if args.env not in available_envs:
+             raise ValueError(f"Unknown env {args.env}")
+-- 
+2.50.1
+

@@ -1,0 +1,50 @@
+From b707cfa9d1482d37a2090f3cb2ae2adf1548fb18 Mon Sep 17 00:00:00 2001
+From: Dhawal Kabra <dk5426@nyu.edu>
+Date: Thu, 29 Oct 2026 20:33:44 -0400
+Subject: [PATCH 4/9] Local: walker v2 env (joystick + fixed DR ids +
+ floor-surface DR)
+---
+ playground/open_duck_mini_v2/joystick_sdr.py | 9 +++++++++
+ playground/open_duck_mini_v2/runner.py       | 3 ++-
+ 2 files changed, 11 insertions(+), 1 deletion(-)
+ create mode 100644 playground/open_duck_mini_v2/joystick_sdr.py
+
+diff --git a/playground/open_duck_mini_v2/joystick_sdr.py b/playground/open_duck_mini_v2/joystick_sdr.py
+new file mode 100644
+index 0000000..48c6167
+--- /dev/null
++++ b/playground/open_duck_mini_v2/joystick_sdr.py
+@@ -0,0 +1,9 @@
++"""Walker v2 for Open Duck Mini V2. Local addition, not upstream.
++
++Upstream's joystick task unchanged (same rewards, observations, action scale 0.25, imitation reference), with the
++domain randomizer replaced by getup.make_randomizer: upstream's randomization with the floor / torso ids looked up by
++name (upstream hardcodes geom 0 and the massless 'base' body) plus floor-surface randomization (surface_dr.py).
++"""
++
++from .joystick import Joystick, default_config  # noqa: F401
++from .getup import make_randomizer  # noqa: F401
+diff --git a/playground/open_duck_mini_v2/runner.py b/playground/open_duck_mini_v2/runner.py
+index b7e72e0..a7b8e44 100644
+--- a/playground/open_duck_mini_v2/runner.py
++++ b/playground/open_duck_mini_v2/runner.py
+@@ -4,7 +4,7 @@ import argparse
+ 
+ from playground.common import randomize
+ from playground.common.runner import BaseRunner
+-from playground.open_duck_mini_v2 import joystick, standing, getup, jump
++from playground.open_duck_mini_v2 import joystick, standing, getup, jump, joystick_sdr
+ 
+ 
+ class OpenDuckMiniV2Runner(BaseRunner):
+@@ -16,6 +16,7 @@ class OpenDuckMiniV2Runner(BaseRunner):
+             "standing": (standing, standing.Standing),
+             "getup": (getup, getup.Getup),
+             "jump": (jump, jump.Jump),
++            "joystick_sdr": (joystick_sdr, joystick_sdr.Joystick),
+         }
+         if args.env not in available_envs:
+             raise ValueError(f"Unknown env {args.env}")
+-- 
+2.50.1
+

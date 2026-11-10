@@ -1,0 +1,91 @@
+--- original_installed/scripts/v2_rl_walk_mujoco.py	2026-10-30 14:29:32
++++ patched/scripts/v2_rl_walk_mujoco.py	2026-10-30 14:32:50
+@@ -217,6 +217,7 @@
+         getup_path = os.environ.get("DUCK_GETUP_ONNX_MODEL", os.path.join(REPO_DIR, "getup.onnx"))
+         if os.path.exists(getup_path):
+             self.getup_policy = OnnxInfer(getup_path, awd=True)
++            self._init_getup_imu_correction()
+             print(f"[GETUP] policy loaded: {getup_path}; button index {self.getup_button_index}")
+         else:
+             print(f"[GETUP] no get-up policy at {getup_path}; get-up button disabled")
+@@ -388,6 +389,21 @@
+                     f"({self.hwi.joint_names[max_current_i]})"
+                 )
+ 
++        # Owner 2026-10-30: no low-voltage cutoff during a get-up. All 14 servos starting together sag the bus
++        # (7.8 V at rest -> 5.6 V for a moment) and the cutoff killed the runtime 0.16 s into a get-up. Only an
++        # optional hard floor applies then (DUCK_GETUP_MIN_VOLTAGE, unset = none). Walking keeps the normal cutoff.
++        if getattr(self, "getup_active", False):
++            floor = float(os.environ.get("DUCK_GETUP_MIN_VOLTAGE", "0") or 0)
++            if min_voltage < floor:
++                print(f"[FATAL] Motor bus voltage {min_voltage:.2f}V below the get-up floor {floor:.2f}V. "
++                      "Turning off torque.", flush=True)
++                self.hwi.turn_off()
++                return False
++            if min_voltage < self.min_motor_voltage:
++                print(f"[GETUP] bus voltage {min_voltage:.2f}V below the {self.min_motor_voltage:.2f}V cutoff; "
++                      "ignored during get-up", flush=True)
++            return True
++
+         if min_voltage < self.min_motor_voltage:
+             print(
+                 f"[FATAL] Motor bus voltage too low: {min_voltage:.2f}V "
+@@ -467,6 +483,34 @@
+     GETUP_TIMEOUT_S = 10.0
+     GETUP_STAND_S = 1.0
+     GETUP_SETTLE_STEPS = 25
++    # Accelerometer at the home pose in the training model (MuJoCo imu site, 2026-10-30). The get-up's IMU correction
++    # rotates and scales the robot's reading so that its own standing reading (DUCK_IMU_STANDING_ACC) maps onto this.
++    SIM_STANDING_ACC = np.array([-1.22, -1.95, 9.54])
++
++    def _init_getup_imu_correction(self):
++        """DUCK_IMU_STANDING_ACC="ax,ay,az": the robot's raw accelerometer while standing still at home (median of a
++        few seconds, e.g. from a recorder log). Unset -> no correction. Used by the get-up only; the walker's
++        observations are not touched."""
++        self.g_imu_R, self.g_imu_scale = np.eye(3), 1.0
++        raw = os.environ.get("DUCK_IMU_STANDING_ACC", "").strip()
++        if not raw:
++            print("[GETUP] no IMU correction (DUCK_IMU_STANDING_ACC unset)", flush=True)
++            return
++        try:
++            robot = np.array([float(x) for x in raw.split(",")])
++            assert robot.shape == (3,) and 5.0 < np.linalg.norm(robot) < 15.0
++        except Exception:
++            print(f"[GETUP] bad DUCK_IMU_STANDING_ACC={raw!r}; no IMU correction", flush=True)
++            return
++        a = robot / np.linalg.norm(robot)
++        b = self.SIM_STANDING_ACC / np.linalg.norm(self.SIM_STANDING_ACC)
++        v, c = np.cross(a, b), float(np.dot(a, b))
++        vx = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
++        self.g_imu_R = np.eye(3) + vx + vx @ vx / (1 + c)  # rotates the robot's standing reading onto the model's
++        self.g_imu_scale = np.linalg.norm(self.SIM_STANDING_ACC) / np.linalg.norm(robot)
++        ang = np.degrees(np.arccos(np.clip(c, -1, 1)))
++        print(f"[GETUP] IMU correction: rotate {ang:.1f} deg, scale accel x{self.g_imu_scale:.3f} "
++              f"(robot standing reading {np.round(robot, 2).tolist()})", flush=True)
+ 
+     def _check_getup_button(self):
+         controller = self.command_controller
+@@ -511,8 +555,10 @@
+         targets, foot contacts. The walker's IMU filter is NOT used here: it freezes the accelerometer whenever an axis
+         reads > 9.8 m/s^2, which is most of the time on the floor, where gravity lies along x or y."""
+         imu = self.imu.get_data()
+-        gyro = np.clip(np.asarray(imu["gyro"], dtype=float), -20, 20)
+-        acc = np.clip(np.asarray(imu["accelero"], dtype=float), -30, 30)
++        self._g_raw_imu = (np.asarray(imu["gyro"], dtype=float).copy(), np.asarray(imu["accelero"], dtype=float).copy())
++        gyro = self.g_imu_R @ np.asarray(imu["gyro"], dtype=float)
++        acc = self.g_imu_scale * (self.g_imu_R @ np.asarray(imu["accelero"], dtype=float))
++        gyro, acc = np.clip(gyro, -20, 20), np.clip(acc, -30, 30)
+         contacts = np.asarray(self.feet_contacts.get(), dtype=float)
+         obs = np.concatenate([gyro, acc, pos - self.g_home, vel * 0.05, self.g_a1, self.g_a2, self.g_a3,
+                               self.g_targets, contacts]).astype(np.float32)
+@@ -539,8 +585,8 @@
+         tgt = np.clip(tgt, self.g_targets - lim, self.g_targets + lim)
+         self.g_targets = tgt
+         self.hwi.set_position_all(make_action_dict(tgt, list(self.hwi.joints.keys())))
+-        self.rec.add("getup", obs=obs, action=self.g_a1, targets=tgt, pos=pos, vel=vel, gyro_raw=obs[0:3],
+-                     acc_raw=acc)
++        self.rec.add("getup", obs=obs, action=self.g_a1, targets=tgt, pos=pos, vel=vel, gyro_raw=self._g_raw_imu[0],
++                     acc_raw=self._g_raw_imu[1])  # obs[0:6] holds the corrected IMU the policy saw
+ 
+         now = time.monotonic()
+         up = acc[2] / max(np.linalg.norm(acc), 1e-6)

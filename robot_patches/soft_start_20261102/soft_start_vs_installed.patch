@@ -1,0 +1,23 @@
+--- original_installed/scripts/v2_rl_walk_mujoco.py	2026-11-02 12:35:18
++++ patched/scripts/v2_rl_walk_mujoco.py	2026-11-02 12:35:30
+@@ -517,6 +517,11 @@
+     GETUP_TIMEOUT_S = 10.0
+     GETUP_STAND_S = 1.0
+     GETUP_SETTLE_STEPS = 25
++    # Soft start (2026-11-02): joint-speed limit x GETUP_SOFT_FACTOR for the first GETUP_SOFT_S of a get-up. All 14
++    # servos starting at full speed browned the Pi out once; in sim (getup_real_eval --soft 0.5) this cuts the
++    # start-up torque peak 39 -> 25 N m and still stands from 13/13 recorded robot starts.
++    GETUP_SOFT_S = float(os.environ.get("DUCK_GETUP_SOFT_S", "0.5"))
++    GETUP_SOFT_FACTOR = float(os.environ.get("DUCK_GETUP_SOFT_FACTOR", str(1 / 3)))
+     # Accelerometer at the home pose in the training model (MuJoCo imu site, 2026-10-30). The get-up's IMU correction
+     # rotates and scales the robot's reading so that its own standing reading (DUCK_IMU_STANDING_ACC) maps onto this.
+     SIM_STANDING_ACC = np.array([-1.22, -1.95, 9.54])
+@@ -616,6 +621,8 @@
+         self.g_a3, self.g_a2, self.g_a1 = self.g_a2, self.g_a1, np.asarray(a, dtype=float)
+         tgt = np.clip(self.g_home + self.GETUP_ACTION_SCALE * self.g_a1, self.GETUP_LO, self.GETUP_HI)
+         lim = self.GETUP_MAX_VEL / self.control_freq
++        if time.monotonic() - self.g_t0 < self.GETUP_SOFT_S:
++            lim *= self.GETUP_SOFT_FACTOR
+         tgt = np.clip(tgt, self.g_targets - lim, self.g_targets + lim)
+         self.g_targets = tgt
+         self.hwi.set_position_all(make_action_dict(tgt, list(self.hwi.joints.keys())))

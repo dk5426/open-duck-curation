@@ -1,0 +1,160 @@
+--- original_installed/scripts/v2_rl_walk_mujoco.py	2026-10-30 13:49:08
++++ patched/scripts/v2_rl_walk_mujoco.py	2026-10-30 14:01:00
+@@ -19,6 +19,8 @@
+ from mini_bdx_runtime.duck_config import DuckConfig
+ 
+ import os
++import threading
++from threading import Thread
+ 
+ HOME_DIR = os.path.expanduser("~")
+ 
+@@ -31,8 +33,92 @@
+ # This prevents pygame.init() from hanging when no display is available
+ os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+ os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
++
++
++class StepRecorder:
++    """Records every control step of the walker and the get-up to ~/duck_logs (2026-10-30), for comparing the robot
++    with the simulation. Does not change what the robot does. One file per segment: a segment starts when a mode
++    (walk / getup) starts stepping and ends when it stops (pause, abort, finish) for more than 0.5 s.
++
++    Kept cheap inside the 50 Hz loop: each step is copied into preallocated arrays (no Python lists to convert later).
++    Every 30 s only the new rows go to a small part file (<segment>.partNNN.npz), so a crash loses at most 30 s; when
++    the segment ends, the whole segment is written as one file and the parts are deleted. All file writing happens in
++    a low-priority background thread. Off with DUCK_RECORD=0; folder DUCK_RECORD_DIR (default ~/duck_logs)."""
++
++    GAP_S, FLUSH_S, CAP = 0.5, 30.0, 3000
++
++    def __init__(self, meta):
++        self.enabled = os.environ.get("DUCK_RECORD", "1") != "0"
++        self.dir = os.path.expanduser(os.environ.get("DUCK_RECORD_DIR", "~/duck_logs"))
++        self.meta = meta
++        self.mode, self.buf, self.n, self.last_t = None, None, 0, 0.0
++        self._lock = threading.Lock()  # one file write at a time, in order
++        if self.enabled:
++            os.makedirs(self.dir, exist_ok=True)
++            print(f"[REC] recording walker and get-up steps to {self.dir}", flush=True)
++
++    def add(self, mode, **row):
++        if not self.enabled:
++            return
++        now = time.monotonic()
++        if mode != self.mode or now - self.last_t > self.GAP_S:
++            self.close()
++            self.mode, self.n, self.parts, self.flushed_n, self.flushed_t = mode, 0, [], 0, now
++            self.path = os.path.join(self.dir, time.strftime("%Y%m%d_%H%M%S") + f"_{mode}.npz")
++            self.buf = {k: np.zeros((self.CAP,) + np.shape(v), dtype=np.float32) for k, v in row.items()}
++            self.buf["t"] = np.zeros(self.CAP)
++        if self.n == len(self.buf["t"]):  # grow (rare: every 60 s, then 120 s, ...)
++            self.buf = {k: np.concatenate([v, np.zeros_like(v)]) for k, v in self.buf.items()}
++        for k, v in row.items():
++            self.buf[k][self.n] = v
++        self.buf["t"][self.n] = now
++        self.n += 1
++        self.last_t = now
++        if now - self.flushed_t > self.FLUSH_S:
++            part = f"{self.path[:-4]}.part{len(self.parts):03d}.npz"
++            self.parts.append(part)
++            self._write(part, self._snapshot(self.flushed_n, self.n), [])
++            self.flushed_n, self.flushed_t = self.n, now
++
++    def idle(self):
++        if self.mode is not None and time.monotonic() - self.last_t > self.GAP_S:
++            self.close()
+ 
++    def close(self):
++        if self.mode is not None and self.n:
++            self._write(self.path, self._snapshot(0, self.n), self.parts)
++            print(f"[REC] {self.mode}: {self.n} steps -> {self.path}", flush=True)
++        self.mode, self.buf, self.n = None, None, 0
+ 
++    def _snapshot(self, a, b):
++        return {k: v[a:b].copy() for k, v in self.buf.items()}
++
++    def _write(self, path, arrays, delete_after):
++        mode, meta, lock = self.mode, repr(self.meta), self._lock
++
++        def work():
++            try:
++                os.setpriority(os.PRIO_PROCESS, threading.get_native_id(), 19)
++            except Exception:
++                pass
++            with lock:
++                self._write_now(path, mode, meta, arrays, delete_after)
++
++        Thread(target=work, daemon=True).start()
++
++    @staticmethod
++    def _write_now(path, mode, meta, arrays, delete_after):
++        try:
++            tmp = path + ".tmp.npz"
++            np.savez(tmp, mode=mode, meta=meta, **arrays)
++            os.replace(tmp, path)
++            for f in delete_after:
++                if os.path.exists(f):
++                    os.remove(f)
++        except Exception as e:  # never let logging take the robot down
++            print(f"[REC] write failed: {e}", flush=True)
++
++
+ class RLWalk:
+     def __init__(
+             self,
+@@ -155,6 +241,12 @@
+         self.last_last_last_action = np.zeros(self.num_dofs)
+ 
+         self.init_pos = list(self.hwi.init_pos.values())
++        self.rec = StepRecorder({
++            "walker_onnx": self.onnx_model_path, "getup_onnx": os.environ.get("DUCK_GETUP_ONNX_MODEL") if self.getup_policy else None,
++            "action_scale": self.action_scale, "getup_action_scale": self.GETUP_ACTION_SCALE, "kp": self.pid[0],
++            "control_freq": self.control_freq, "joints": list(getattr(self.hwi, "joints", {}).keys()),
++            "init_pos": [float(x) for x in self.init_pos]})
++        self._rec_imu_raw = (np.zeros(3), np.zeros(3))
+ 
+         self.motor_targets = np.array(self.init_pos.copy())
+         self.prev_motor_targets = np.array(self.init_pos.copy())
+@@ -188,6 +280,7 @@
+     def get_obs(self):
+ 
+         imu_data = self.imu.get_data()
++        self._rec_imu_raw = (np.array(imu_data["gyro"], dtype=float), np.array(imu_data["accelero"], dtype=float))
+         gyro_deg = np.degrees(imu_data["gyro"])
+         # imu_data["gyro"][1] = imu_data["gyro"][1]*1.1
+         # print("[IMU] gyro_deg:", gyro_deg)
+@@ -446,6 +539,8 @@
+         tgt = np.clip(tgt, self.g_targets - lim, self.g_targets + lim)
+         self.g_targets = tgt
+         self.hwi.set_position_all(make_action_dict(tgt, list(self.hwi.joints.keys())))
++        self.rec.add("getup", obs=obs, action=self.g_a1, targets=tgt, pos=pos, vel=vel, gyro_raw=obs[0:3],
++                     acc_raw=acc)
+ 
+         now = time.monotonic()
+         up = acc[2] / max(np.linalg.norm(acc), 1e-6)
+@@ -572,6 +667,7 @@
+                     continue
+ 
+                 if self.paused:
++                    self.rec.idle()
+                     time.sleep(0.1)
+                     continue
+ 
+@@ -676,6 +772,9 @@
+                 )
+ 
+                 self.hwi.set_position_all(action_dict)
++                self.rec.add("walk", obs=obs, action=action, targets=self.motor_targets,
++                             gyro_raw=self._rec_imu_raw[0], acc_raw=self._rec_imu_raw[1],
++                             commands=np.asarray(self.last_commands, dtype=float), took=time.time() - t)
+ 
+                 i += 1
+ 
+@@ -692,6 +791,7 @@
+             if self.duck_config.antennas:
+                 self.antennas.stop()
+         finally:
++            self.rec.close()
+             if self.shutdown_requested:
+                 stop_and_poweroff(
+                     self.hwi, getattr(self, 'antennas', None), self.command_controller
