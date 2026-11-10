@@ -123,3 +123,17 @@ Timestamped journal of the overnight work (GPUs 1 and 2 only; GPU 3 stays free).
   command; failures; open decisions; commits) and a private gallery page with every video inline. PREREG: proposal 5
   (tighter τ tie band); P.5 text matches the fixed duration matching. GPUs 1 and 2 are idle; no further runs were
   started (one seed per condition as decided; a second seed of curated and full is listed as an option for the team).
+
+## Full study with the recommended settings (2026-11-10)
+
+- **11:26** Driver `curation/study/run_study.py` smoke-tested end to end (1 seed, 1–2M steps, `results/st5smoke` on
+  the cluster only): every stage ran, from scoring through τ choice, subsets, finals, test evaluation and comparison.
+- **12:03** Study `st5` started on GPUs 1 and 2. Settings:
+  - dataset v5, reference feed-forward, motion-relative tolerances;
+  - scoring policy 300M; τ fine-tunes 50M, scored on val with 30 rollouts, tie band 0.02;
+  - full, curated, random (one draw per seed) and kinematic, each at 200M, seeds 0/1/2;
+  - test evaluation: nominal, push 0.3 / 0.6 m/s, friction × 0.6;
+  - comparison with secondary analyses (gaits only, trackability strata, training-range split).
+
+  Results go to `results/st5/` (`SUMMARY.md` when done). Expected finish around midnight. This is still not
+  pre-registered: the team has not signed PREREG.

@@ -245,7 +245,8 @@ def main():
                             f"Study {T}, test clips, {tag}{', gaits only' if ex else ''}", "--out", out], check=True,
                            capture_output=True)
             body = open(out).read().split("\n")
-            keep = [ln for ln in body if ln.startswith("| ") and not ln.startswith("| `") or ln.startswith("- ")]
+            keep = [ln for ln in body if (ln.startswith("| ") and not ln.startswith(("| `", "| clip "))) or
+                    ln.startswith(("- ", "**", "## Secondary"))]
             summary += [f"## {tag}{' (gaits only)' if ex else ''}", "", *keep, ""]
     curves = subprocess.run([PY, os.path.join(C, "curation/analysis/compare_runs.py"), "--runs",
                              *[os.path.join(RUNS, n) for n in finals.values()], "--at", "50", "100", "200",
