@@ -7,7 +7,11 @@ clip, as P.8 states), per category and overall, and the P.9 pass bar.
 
   python compare_conditions.py --manifest data/clips_v4/manifest.json --out results/dry_run/comparison.md \
       --cond full=eval_full.json curated=eval_curated.json random=eval_random.json kinematic=eval_kinematic.json \
-      [--exclude-category head] [--title "..."]
+      [--exclude-category head] [--strata-scores scores_test_scoring.json --tau 1.2] [--title "..."]
+
+Secondary analyses (PREREG P.8): with --strata-scores and --tau, the paired differences are also reported separately
+for test clips the scoring policy tracks within τ ("trackable") and beyond it. Every run also splits test clips by
+whether their motion parameters lie inside the range the category's training clips cover.
 
 Each value may be a comma-separated list of JSON files (one per seed).
 """
@@ -42,12 +46,54 @@ def boot_ci(ref, oth, rng):
     return float(np.percentile(m, 2.5)), float(np.percentile(m, 97.5))
 
 
+# Numeric motion parameters that define each category's range (manifest "params"); magnitudes, so mirrored clips count
+RANGE_KEYS = {"walk_fwd": ("dx", "foot_lift_m"), "walk_back": ("dx", "foot_lift_m"), "side_step": ("dy", "foot_lift_m"),
+              "turn_in_place": ("dtheta", "foot_lift_m"), "walk_turn": ("dx", "dtheta", "foot_lift_m"),
+              "march": ("foot_lift_m",), "crouch": ("depth_frac",), "bow": ("pitch_deg",), "sway": ("amp_m", "freq_hz"),
+              "head": ("move",)}
+
+
+def in_train_range(man):
+    """Test clip id -> True if each of its category's parameters lies inside the training clips' range (a categorical
+    parameter must match a training value)."""
+    clips = man["clips"]
+    out = {}
+    for c in clips:
+        if c["split"] != "test":
+            continue
+        tr = [t for t in clips if t["split"] == "train" and t["category"] == c["category"]]
+        ok = True
+        for k in RANGE_KEYS.get(c["category"], ()):
+            v = c["params"].get(k)
+            vals = [t["params"].get(k) for t in tr]
+            if isinstance(v, str):
+                ok &= v in vals
+            else:
+                mags = [abs(x) for x in vals]
+                ok &= min(mags) - 1e-9 <= abs(v) <= max(mags) + 1e-9
+        out[c["id"]] = bool(ok)
+    return out
+
+
+def delta_table(res, ref, ids, rng):
+    rows = ["| vs | clips | Δe [95% CI] |", "|---|---|---|"]
+    for k in res:
+        if k == ref or not ids:
+            continue
+        d = np.mean([res[ref][i]["score"] - res[k][i]["score"] for i in ids])
+        lo, hi = boot_ci([res[ref][i]["seeds"] for i in ids], [res[k][i]["seeds"] for i in ids], rng)
+        rows.append(f"| {k} | {len(ids)} | {d:+.3f} [{lo:+.3f}, {hi:+.3f}] |")
+    return rows
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--manifest", required=True)
     p.add_argument("--cond", nargs="+", required=True, help="name=file[,file...]")
     p.add_argument("--ref", default="curated")
     p.add_argument("--exclude-category", nargs="*", default=[])
+    p.add_argument("--strata-scores", default=None, help="eval_clips.py JSON of the test clips under the scoring policy")
+    p.add_argument("--tau", type=float, default=None)
     p.add_argument("--title", default="Test-set comparison")
     p.add_argument("--out", required=True)
     a = p.parse_args()
@@ -89,6 +135,19 @@ def main():
               f"- worst per-category completion drop vs full: {worst:+.3f} (bar: ≥ −0.05): "
               f"**{'yes' if worst >= -0.05 else 'no'}**",
               f"- **pass: {'yes' if all(ok for _, ok in passes) and worst >= -0.05 else 'no'}**"]
+    rng2 = np.random.default_rng(1)
+    rng_ok = in_train_range(man)
+    L += ["", "## Secondary: test clips inside vs outside the training parameter range", "",
+          f"Inside: {', '.join(sorted(i for i in ids if rng_ok.get(i))) or 'none'}", ""]
+    for name, grp in (("inside", [i for i in ids if rng_ok.get(i)]), ("outside", [i for i in ids if not rng_ok.get(i)])):
+        L += [f"**{name}**", "", *delta_table(res, a.ref, grp, rng2), ""]
+    if a.strata_scores and a.tau is not None:
+        st = json.load(open(a.strata_scores))["clips"]
+        easy = [i for i in ids if i in st and st[i]["score"] <= a.tau]
+        hard = [i for i in ids if i in st and st[i]["score"] > a.tau]
+        L += [f"## Secondary: test clips by trackability under the scoring policy (τ* = {a.tau:.3f})", ""]
+        for name, grp in (("trackable (e ≤ τ*)", easy), ("beyond τ*", hard)):
+            L += [f"**{name}**", "", *delta_table(res, a.ref, grp, rng2), ""]
     L += ["", "## Per clip (e)", "", "| clip | category | " + " | ".join(res) + " |", "|---|---|" + "---|" * len(res)]
     for i in sorted(ids, key=lambda i: (cat[i], i)):
         L.append(f"| `{i}` | {cat[i]} | " + " | ".join(f"{res[k][i]['score']:.2f}" for k in res) + " |")

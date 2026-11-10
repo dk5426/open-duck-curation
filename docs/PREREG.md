@@ -74,7 +74,8 @@ not separate clips; adjust τ once, before sign-off.
 - **For each candidate:**
   1. fine-tune the scoring policy for 50M steps on the selected subset D_τ;
   2. score the **validation** clips (P.2).
-- **Pick:** τ* is the candidate with the lowest mean validation score. Ties within 0.05 go to the larger subset.
+- **Pick:** τ* is the candidate with the lowest mean validation score (30 rollouts per validation clip). Ties within
+  0.02 go to the larger subset (was 0.05; in the dry run all four candidates fell inside 0.05).
 - **Freeze:** τ* and the curated clip list are written here.
 
 ## P.5 Random control
@@ -109,7 +110,11 @@ not separate clips; adjust τ once, before sign-off.
 - **Per test clip:** average over the 3 seeds.
 - **Comparisons:** curated − full and curated − random, as paired differences over test clips.
 - **Uncertainty:** 95% bootstrap confidence intervals (10,000 resamples over clips; seeds resampled within clips).
-- **Reporting:** per category and aggregate. With 11 test clips, report effect sizes with CIs, not significance stars.
+- **Reporting:** per category and aggregate. With 18 test clips, report effect sizes with CIs, not significance stars.
+- **Secondary analyses** (reported, not part of the pass bar):
+  1. gaits only (stationary categories crouch, bow, sway, head excluded);
+  2. test clips the scoring policy tracks within τ* vs beyond it (does curation trade range for accuracy?);
+  3. test clips whose motion parameters lie inside vs outside the training clips' range (7 of 18 in v5 are inside).
 
 ## P.9 Pass bar: "curation helps"
 
