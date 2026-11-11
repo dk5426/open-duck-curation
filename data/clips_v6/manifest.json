@@ -2141,5 +2141,5 @@
   "walk_turn__dx0.04_dy0_dth0.30__gentle",
   "walk_turn__dx0.04_dy0_dth0.30__normal"
  ],
- "split_note": "v6 = v5 with sway 0.03 m (train) and sway 0.02 m (val) swapped: with sway 0.03 in train no policy learned gaits (study st5, docs/OVERNIGHT_LOG.md 2026-11-10). Test split unchanged."
+ "split_note": "SUPERSEDED, do not use. v6 = v5 with sway 0.03 m / 0.02 m train-val swapped, made from a misleading ablation; the real cause of the st5 stall was the auto-reset bug fixed in Open Duck Playground patch 0013. The study uses v5."
 }

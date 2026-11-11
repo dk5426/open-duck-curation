@@ -31,7 +31,7 @@ PPO).
 | Folder | Contents |
 |---|---|
 | `docs/` | Plan, tracker snapshot, audit, setup notes |
-| `patches/open_duck_playground/` | Our changes to Open Duck Playground as a patch series (12 commits on top of upstream `b9be205`): pinned dependencies, get-up and jump tasks, floor-surface randomization, walker v2, name-based randomization ids, and the **reference-clip tracking environment** (`tracking.py`; 0011 adds motion-relative tolerances and the 1.66 rad knee; 0012 adds reference feed-forward actions) |
+| `patches/open_duck_playground/` | Our changes to Open Duck Playground as a patch series (13 commits on top of upstream `b9be205`): pinned dependencies, get-up and jump tasks, floor-surface randomization, walker v2, name-based randomization ids, and the **reference-clip tracking environment** (`tracking.py`; 0011 adds motion-relative tolerances and the 1.66 rad knee; 0012 adds reference feed-forward actions; 0013 resets the episode state on auto-reset) |
 | `patches/reference_motion_generator/` | Dependency pin for the reference-motion generator (on top of upstream `3d7bc6f`) |
 | `patches/locks/` | `uv.lock` files that resolve the exact versions we trained with |
 | `tools/` | Evaluation and analysis scripts: walker evaluation and tracking score, robot-log vs sim comparison, IMU plots, servo response, get-up evaluation and replay, start-pose banks, GPU-safe launch and queue scripts |

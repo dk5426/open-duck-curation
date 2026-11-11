@@ -161,3 +161,20 @@ Timestamped journal of the overnight work (GPUs 1 and 2 only; GPU 3 stays free).
   the same six joints and was in train in v4. Test split unchanged (18 clips). Study `st6` started on GPUs 1 and 2
   with the same settings as st5, `--lib data/clips_v6`. Checkpoint: st6_score must pass about 140 episode length by
   50M, otherwise stop.
+- **00:00 (11-11)** st6 failed its checkpoint (st6_score 86 → 86 → 81 by 64M), but st6_full_s0, with the same
+  clips and seed, reached 123. So it is not the data. Every stalled run had a budget ≥ 200M; every healthy run had
+  50–100M.
+  - **Cause: an env bug.** `BraxAutoResetWrapper` restores only `data` and `obs` to the episode's first state on
+    `done`. The tracking env keeps `frame`, `motor_targets`, the action history and `prev_feet` in `info`, and those
+    carried over.
+  - After a clip end, `frame` stays ≥ length, so every step is `done` (1-step episodes). After a fall, the reference
+    resumes at the fall frame while the robot is back at the start pose.
+  - Both last until the next full reset, once per eval interval: budget / 15, which is every 20M steps at 300M and
+    3.3M at 50M. That is why the 50M ablations "worked".
+  - Reproduced on CPU (wrapper, stepping past a clip end): 12 of 16 steps `done` before the fix, 3 of 16 (one per
+    clip end) after.
+  - Fix = Open Duck Playground patch 0013: on `done`, the env resets those info fields to their start values.
+  - **The dry run (100M, full reset every 6.7M) was partly affected, so its numbers are void as evidence.**
+  - Dataset v6 is superseded (built from the misleading ablation); back to v5.
+- **00:06** st7 started on GPUs 1 and 2: v5, fixed env (playground 2925fd6), same settings as st5. Checkpoint:
+  st7_score must stay healthy past 50M, and above all must keep climbing after the 20M first reset interval.

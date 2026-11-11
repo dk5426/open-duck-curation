@@ -1,0 +1,42 @@
+From 2925fd6dab538ed8ac665d32cc16d65eace3ef4f Mon Sep 17 00:00:00 2001
+From: Dhawal Kabra <dk5426@nyu.edu>
+Date: Wed, 11 Nov 2026 00:06:04 -0500
+Subject: [PATCH] Tracking: reset episode info on auto-reset
+ (BraxAutoResetWrapper restores only data/obs)
+
+---
+ playground/open_duck_mini_v2/tracking.py | 11 ++++++++++-
+ 1 file changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/playground/open_duck_mini_v2/tracking.py b/playground/open_duck_mini_v2/tracking.py
+index 3aca6f7..8b13ab3 100644
+--- a/playground/open_duck_mini_v2/tracking.py
++++ b/playground/open_duck_mini_v2/tracking.py
+@@ -257,7 +257,8 @@ class Tracking(open_duck_mini_v2_base.OpenDuckMiniV2Env):
+                 "last_act": jp.zeros(self._nu), "last_last_act": jp.zeros(self._nu),
+                 "last_last_last_act": jp.zeros(self._nu), "motor_targets": ctrl,
+                 "action_history": jp.zeros(self._config.noise_config.action_max_delay * self._nu),
+-                "prev_feet": data.site_xpos[self._feet_site_id]}
++                "prev_feet": data.site_xpos[self._feet_site_id],
++                "start_ctrl": ctrl, "start_feet": data.site_xpos[self._feet_site_id]}
+         metrics = {f"reward/{k}" if v > 0 else f"cost/{k}": jp.zeros(())
+                    for k, v in self._config.reward_config.scales.items()}
+         for k in ("err/legs_rms", "err/head_rms", "err/keypoints", "err/lin_vel", "err/yaw_rate", "progress"):
+@@ -301,6 +302,14 @@ class Tracking(open_duck_mini_v2_base.OpenDuckMiniV2Env):
+         for k, v in errs.items():
+             state.metrics[k] = v
+         obs = self._get_obs(data, info, contact)
++        # BraxAutoResetWrapper restores only data and obs to the episode's first state on done. Reset the episode info
++        # to match it, or the next episode keeps the old frame: after a clip end every step is done (1-step episodes)
++        # until the next full reset, once per eval interval (every 20M steps at 300M), so long runs trained on garbage.
++        for k, v0 in (("frame", info["start"]), ("motor_targets", info["start_ctrl"]),
++                      ("prev_feet", info["start_feet"])):
++            info[k] = jp.where(done, v0, info[k])
++        for k in ("last_act", "last_last_act", "last_last_last_act", "action_history"):
++            info[k] = jp.where(done, jp.zeros_like(info[k]), info[k])
+         return state.replace(data=data, obs=obs, reward=reward, done=done.astype(reward.dtype))
+ 
+     def _terms(self, data, action, info, ref, contact):
+-- 
+2.50.1
+
