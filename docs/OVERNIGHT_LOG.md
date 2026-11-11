@@ -137,3 +137,27 @@ Timestamped journal of the overnight work (GPUs 1 and 2 only; GPU 3 stays free).
 
   Results go to `results/st5/` (`SUMMARY.md` when done). Expected finish around midnight. This is still not
   pre-registered: the team has not signed PREREG.
+- **18:30** Halfway check: st5 is invalid. No v5 run learns to track gaits.
+  - The scoring policy peaks at episode length 97 at 43M and ends at 78 by 300M. The three full seeds stay at 80–100.
+    The v4 dry-run scoring policy climbed to 150 by 100M with the same code and PPO settings.
+  - On the training clips the scoring policy gets mean e 2.42, and about 90% of its rollouts fall.
+  - Only 5 stationary clips pass the completion ≥ 0.8 filter at every τ, so curated (and the matched random) are
+    5 clips with no gaits.
+  - v4 and v5 use the same `library.npz` (identical md5). Only the split labels differ.
+  - The v4 policy on the v5 training clips gets e 1.10 with 94% completion, so evaluation and clips are fine.
+  - Main suspect: `head__look_around` (both copies moved into train in v5; the v4 policy falls 10/10 on it).
+    Second suspect: `sway 0.03 m`.
+- **22:43** The owner chose to stop and diagnose. st5 stopped (driver and children, by PID).
+  - Ablations at 50M, seed 0, on v5 train: `abl5_nolook_50M` (no look_around, 35 clips) on GPU 1,
+    `abl5_nosway03_50M` (no sway 0.03, 35 clips) on GPU 2.
+  - Reference curves at about 50M: v4 scoring 120, v5 scoring 97.
+- **23:12** Ablations done, episode length at 50M: no look_around 157.5, no sway 0.03 157.1, v5 (st5_score) 97, v4 120.
+  - Removing either pair fixes training.
+  - The st5 policy learned `look_around` (96% completion) at the cost of every gait. The v4 policy never trained on
+    it, fails it, and tracks the gaits.
+  - `look_around` is the only training source that moves head_yaw (shake is in test), so removing it would bring
+    back the zero-variance problem.
+- **23:14** Dataset v6 = v5 with `sway 0.03 m` (train → val) and `sway 0.02 m` (val → train) swapped. Sway 0.02 moves
+  the same six joints and was in train in v4. Test split unchanged (18 clips). Study `st6` started on GPUs 1 and 2
+  with the same settings as st5, `--lib data/clips_v6`. Checkpoint: st6_score must pass about 140 episode length by
+  50M, otherwise stop.
