@@ -50,6 +50,27 @@ def corrupt(kind, q, pos, quat, home, lo, hi, stationary, rng):
     return np.clip(q, lo, hi), pos, quat
 
 
+def write_library(lib, man, extra, out, meta):
+    """The clean library plus `extra` [(manifest entry, arrays)] appended as clips, padded to the library's length."""
+    os.makedirs(out, exist_ok=True)
+    T = lib["q"].shape[1]
+    new = dict(lib)
+    for key in [x for x in lib if x != "length"]:
+        add = np.zeros((len(extra), T) + lib[key].shape[2:], dtype=np.float32)
+        for j, (_, arr) in enumerate(extra):
+            x = arr[key]
+            add[j, : len(x)] = x
+            add[j, len(x):] = x[-1]
+        new[key] = np.concatenate([lib[key], add])
+    new["length"] = np.concatenate([lib["length"], [e["length"] for e, _ in extra]]).astype(np.int32)
+    m2 = dict(man)
+    n0 = len(man["clips"])
+    m2["clips"] = man["clips"] + [e | {"index": n0 + j} for j, (e, _) in enumerate(extra)]
+    m2["contamination"] = meta
+    np.savez_compressed(os.path.join(out, "library.npz"), **new)
+    json.dump(m2, open(os.path.join(out, "manifest.json"), "w"), indent=1)
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--lib", required=True)
@@ -64,7 +85,6 @@ def main():
     rng = np.random.default_rng(SEED)
     train = [c for c in man["clips"] if c["split"] == "train"]
     order = [train[i] for i in rng.permutation(len(train))]
-    T = lib["q"].shape[1]
     extra = []
     for k, c in enumerate(order):
         kind = KINDS[k % len(KINDS)]
@@ -86,26 +106,10 @@ def main():
         extra.append((entry, arrays))
         print(f"  {entry['id']:55s} check {'pass' if rep['pass'] else 'FAIL'}  speed {rep['peak_joint_speed_rad_s']:.2f}")
     for name, k in LEVELS.items():
-        out = a.out + name[1:]
-        os.makedirs(out, exist_ok=True)
-        new = dict(lib)
-        for key in [x for x in lib if x != "length"]:
-            add = np.zeros((k, T) + lib[key].shape[2:], dtype=np.float32)
-            for j, (_, arr) in enumerate(extra[:k]):
-                x = arr[key]
-                add[j, : len(x)] = x
-                add[j, len(x):] = x[-1]
-            new[key] = np.concatenate([lib[key], add])
-        new["length"] = np.concatenate([lib["length"], [e["length"] for e, _ in extra[:k]]]).astype(np.int32)
-        m2 = dict(man)
-        n0 = len(man["clips"])
-        m2["clips"] = man["clips"] + [e | {"index": n0 + j} for j, (e, _) in enumerate(extra[:k])]
-        m2["contamination"] = {"clean_library": os.path.basename(os.path.normpath(a.lib)), "corrupted_train_clips": k,
-                               "share_of_train": round(k / (len(train) + k), 3), "kinds": KINDS, "seed": SEED}
-        np.savez_compressed(os.path.join(out, "library.npz"), **new)
-        json.dump(m2, open(os.path.join(out, "manifest.json"), "w"), indent=1)
-        print(f"{out}: {len(train)} clean + {k} corrupted train clips ({100 * k / (len(train) + k):.0f}%)")
-
+        write_library(lib, man, extra[:k], a.out + name[1:],
+                      {"clean_library": os.path.basename(os.path.normpath(a.lib)), "corrupted_train_clips": k,
+                       "share_of_train": round(k / (len(train) + k), 3), "kinds": KINDS, "seed": SEED})
+        print(f"{a.out + name[1:]}: {len(train)} clean + {k} corrupted train clips ({100 * k / (len(train) + k):.0f}%)")
 
 if __name__ == "__main__":
     main()

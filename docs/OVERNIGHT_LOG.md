@@ -187,3 +187,10 @@ Timestamped journal of the overnight work (GPUs 1 and 2 only; GPU 3 stays free).
   kinematic check). Added `--conds` and corrupted-clip counts to `run_study.py`. Started `run_sweep.sh`: it waits for
   st7's `DONE`, then runs cs30smoke, cs30, cs50, cs15 (full and curated, seeds 0 and 1, about 15 h).
   Plan: `docs/CONTAMINATION_SWEEP.md`.
+- **13:05** st7 DONE. The chain started `cs30smoke`.
+- **13:55** The owner chose to add real "ambitious" clips as the main contamination (corrupted copies are a weaker
+  stand-in). Stopped the chain's bash waiter only; the smoke study kept running.
+  - Built `data/clips_v5amb`: 11 of 37 ambitious candidates pass the kinematic checks, 23% of the training set.
+    Details in `docs/CONTAMINATION_SWEEP.md`.
+  - The `make_contaminated.py` refactor reproduces c15/c30/c50 exactly (arrays and manifests).
+  - New chain: wait for cs30smoke, then cs30, camb, cs50.
