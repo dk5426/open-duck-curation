@@ -180,3 +180,10 @@ Timestamped journal of the overnight work (GPUs 1 and 2 only; GPU 3 stays free).
   st7_score must stay healthy past 50M, and above all must keep climbing after the 20M first reset interval.
 - **01:00** st7 checkpoint passed. At 86M, episode length is 170 for scoring and 168 for full (st5: 98), and leg
   error per step is 0.034 (st5: 0.080). Both curves keep climbing past the 20M first reset interval.
+
+## Contamination sweep (2026-11-11)
+
+- **11:16** Built `data/clips_v5c{15,30,50}` (one corrupted copy per v5 training clip; 17 of 37 copies pass the
+  kinematic check). Added `--conds` and corrupted-clip counts to `run_study.py`. Started `run_sweep.sh`: it waits for
+  st7's `DONE`, then runs cs30smoke, cs30, cs50, cs15 (full and curated, seeds 0 and 1, about 15 h).
+  Plan: `docs/CONTAMINATION_SWEEP.md`.

@@ -4,6 +4,8 @@
       python3 run_study.py --gpus 1 2 [--tag st5] [--lib data/clips_v5]
 
 Smoke test of every stage: --tag st5smoke --seeds 0 --score-steps 2000000 --tau-steps 1000000 --final-steps 1000000
+Contamination sweep (contaminated libraries from curation/clips/make_contaminated.py):
+      --tag cs30 --lib data/clips_v5c30 --conds full curated --seeds 0 1
 
 Steps (each skipped if its output already exists, so the driver can be restarted):
   1. scoring policy on every train clip (300M); full condition, seeds 0/1/2 (200M) fill the other GPU meanwhile
@@ -13,6 +15,7 @@ Steps (each skipped if its output already exists, so the driver can be restarted
   5. curated, random (one draw per seed) and kinematic subsets; 200M from scratch, seeds 0/1/2
   6. test evaluation of every final policy: nominal, push 0.3 / 0.6 m/s, friction x 0.6 (10 rollouts each)
   7. compare_conditions.py per perturbation (all clips and gaits only) and training curves; SUMMARY.md, DONE
+With a contaminated library, the log, tau_choice.json and SUMMARY.md also say how many corrupted clips each subset kept.
 Results go to open-duck-curation/results/<tag>/; runs to runs/<tag>_*.
 """
 
@@ -154,6 +157,8 @@ def main():
     p.add_argument("--tau-steps", type=int, default=50_000_000)
     p.add_argument("--final-steps", type=int, default=200_000_000)
     p.add_argument("--seeds", type=int, nargs="+", default=list(SEEDS), help="fewer only for a smoke test")
+    p.add_argument("--conds", nargs="+", default=["full", "curated", "random", "kinematic"],
+                   help="final conditions; full and curated are always run")
     a = p.parse_args()
     a.lib = os.path.abspath(a.lib)
     SEEDS = tuple(a.seeds)
@@ -162,6 +167,14 @@ def main():
     for d in (OUT, SUB, TEST, os.path.join(OUT, "launch")):
         os.makedirs(d, exist_ok=True)
     man = os.path.join(a.lib, "manifest.json")
+    contam = {c["id"]: c["contaminant"] for c in json.load(open(man))["clips"] if c.get("contaminant")}
+    n_clean = sum(c["split"] == "train" and not c.get("contaminant") for c in json.load(open(man))["clips"])
+
+    def contam_note(ids):
+        if not contam:
+            return ""
+        kept = [i for i in ids if i in contam]
+        return f"; corrupted kept {len(kept)}/{len(contam)}, clean kept {len(ids) - len(kept)}/{n_clean}"
     log(f"study {a.tag}: library {a.lib}, GPUs {a.gpus}")
     S = Scheduler(a.gpus)
     pool = ThreadPoolExecutor(max_workers=len(a.gpus))
@@ -210,10 +223,13 @@ def main():
     best = min(r[1] for r in rows)
     pick = max((r for r in rows if r[1] <= best + TIE), key=lambda r: r[2])
     cands = json.load(open(os.path.join(SUB, "tau_candidates.json")))
-    json.dump({"candidates": [{"tau": q, "value": cands[q], "mean_val_score": m, "clips": n} for q, m, n in rows],
+    subset = lambda q: json.load(open(os.path.join(SUB, f"curated_{q}.json")))  # noqa: E731
+    json.dump({"candidates": [{"tau": q, "value": cands[q], "mean_val_score": m, "clips": n,
+                               "corrupted_kept": sum(i in contam for i in subset(q))} for q, m, n in rows],
                "tie_band": TIE, "tau_star": pick[0], "tau_value": cands[pick[0]]},
               open(os.path.join(OUT, "tau_choice.json"), "w"), indent=1)
-    log("tau: " + ", ".join(f"{q} {m:.3f} ({n} clips)" for q, m, n in rows) + f" -> tau* = {pick[0]}")
+    log("tau: " + ", ".join(f"{q} {m:.3f} ({n} clips{contam_note(subset(q))})" for q, m, n in rows)
+        + f" -> tau* = {pick[0]}")
 
     # 5. matched subsets and the final runs
     subprocess.run([PY, os.path.join(C, "curation/select/select_subsets.py"), "--scores",
@@ -222,6 +238,7 @@ def main():
                    stdout=open(os.path.join(OUT, "subsets.log"), "a"), stderr=subprocess.STDOUT)
     clips = {"curated": lambda s: f"curated_{pick[0]}.json", "random": lambda s: f"random_s{s}.json",
              "kinematic": lambda s: "kinematic.json"}
+    clips = {k: v for k, v in clips.items() if k == "curated" or k in a.conds}
     for s in SEEDS:
         for cond, f in clips.items():
             finals[(cond, s)] = S.submit(f"{T}_{cond}_s{s}", a.final_steps, prio=1, seed=s,
@@ -234,10 +251,11 @@ def main():
     tau_v = cands[pick[0]]
     cc = os.path.join(C, "curation/analysis/compare_conditions.py")
     summary = [f"# Study {T}: summary", "", f"Library `{os.path.basename(a.lib)}`; τ* = {pick[0]} ({tau_v:.3f}); "
-               f"seeds {', '.join(map(str, SEEDS))}; {a.final_steps // 1_000_000}M steps per final run.", ""]
+               f"seeds {', '.join(map(str, SEEDS))}; {a.final_steps // 1_000_000}M steps per final run"
+               f"{contam_note(subset(pick[0]))}.", ""]
     for tag, _ in TESTS:
         conds = [f"{c}=" + ",".join(os.path.join(TEST, f"{c}_s{s}_{tag}.json") for s in SEEDS)
-                 for c in ("full", "curated", "random", "kinematic")]
+                 for c in ["full", *clips]]
         for suffix, ex in (("", []), ("_gaits", ["--exclude-category", *STATIONARY])):
             out = os.path.join(OUT, f"comparison_{tag}{suffix}.md")
             subprocess.run([PY, cc, "--manifest", man, "--cond", *conds, *ex, "--strata-scores",
