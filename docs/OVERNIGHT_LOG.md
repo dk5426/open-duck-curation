@@ -178,3 +178,5 @@ Timestamped journal of the overnight work (GPUs 1 and 2 only; GPU 3 stays free).
   - Dataset v6 is superseded (built from the misleading ablation); back to v5.
 - **00:06** st7 started on GPUs 1 and 2: v5, fixed env (playground 2925fd6), same settings as st5. Checkpoint:
   st7_score must stay healthy past 50M, and above all must keep climbing after the 20M first reset interval.
+- **01:00** st7 checkpoint passed. At 86M, episode length is 170 for scoring and 168 for full (st5: 98), and leg
+  error per step is 0.034 (st5: 0.080). Both curves keep climbing past the 20M first reset interval.
