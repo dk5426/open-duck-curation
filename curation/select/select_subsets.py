@@ -24,10 +24,13 @@ MIN_COMPLETION, COVERAGE_COMPLETION = 0.8, 0.5
 
 
 def curate(scores, man, tau):
-    """P.3: keep clips with e <= tau and completion >= 0.8; each category keeps its best clip if completion >= 0.5."""
+    """P.3: keep clips with e <= tau and completion >= 0.8; each category keeps its best clip if completion >= 0.5.
+    Coverage is over the categories the val / test splits hold: a train-only category (an infeasible pool's lean or
+    jump) is a motion nobody asked for, so it must earn its place by score."""
     cat = {c["id"]: c["category"] for c in man["clips"]}
+    judged = {c["category"] for c in man["clips"] if c["split"] in ("val", "test")}
     keep = {cid for cid, r in scores.items() if r["score"] <= tau and r["completion"] >= MIN_COMPLETION}
-    for c in sorted(set(cat[i] for i in scores)):
+    for c in sorted(set(cat[i] for i in scores) & judged):
         ids = [i for i in scores if cat[i] == c]
         best = min(ids, key=lambda i: scores[i]["score"])
         if scores[best]["completion"] >= COVERAGE_COMPLETION:
