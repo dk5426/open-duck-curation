@@ -11,10 +11,14 @@ Steps (each skipped if its output already exists, so the driver can be restarted
   1. scoring policy on every train clip (300M); full condition, seeds 0/1/2 (200M) fill the other GPU meanwhile
   2. score train + val (10 rollouts) and test (10 rollouts, for the trackability strata only) with the scoring policy
   3. τ candidates p40/p55/p70/p85; 50M fine-tune of the scoring policy on each; score val with 30 rollouts
+     (--tau-from-scratch: train each candidate from scratch instead, so τ is chosen the way the finals are trained;
+     --taus sets the percentiles)
   4. τ* = lowest mean val score, ties within 0.02 go to the larger subset
-  5. curated, random (one draw per seed) and kinematic subsets; 200M from scratch, seeds 0/1/2
+  5. curated, random (one draw per seed), kinematic and checked (passes the kinematic check) subsets; 200M from
+     scratch, seeds 0/1/2
   6. test evaluation of every final policy: nominal, push 0.3 / 0.6 m/s, friction x 0.6 (10 rollouts each)
-  7. compare_conditions.py per perturbation (all clips and gaits only) and training curves; SUMMARY.md, DONE
+  7. compare_conditions.py per perturbation (all clips and gaits only; score, and score_v2 with position / heading)
+     and training curves; SUMMARY.md, DONE
 With a contaminated library, the log, tau_choice.json and SUMMARY.md also say how many corrupted clips each subset kept.
 Results go to open-duck-curation/results/<tag>/; runs to runs/<tag>_*.
 """
@@ -157,6 +161,8 @@ def main():
     p.add_argument("--tau-steps", type=int, default=50_000_000)
     p.add_argument("--final-steps", type=int, default=200_000_000)
     p.add_argument("--seeds", type=int, nargs="+", default=list(SEEDS), help="fewer only for a smoke test")
+    p.add_argument("--taus", nargs="+", default=list(TAUS), help="percentile candidates, e.g. p25 p45 p65 p85")
+    p.add_argument("--tau-from-scratch", action="store_true")
     p.add_argument("--conds", nargs="+", default=["full", "curated", "random", "kinematic"],
                    help="final conditions; full and curated are always run")
     a = p.parse_args()
@@ -198,8 +204,9 @@ def main():
     run_eval(ck, "train", 10, os.path.join(OUT, "scores_train.json"), g)
     run_eval(ck, "val", 30, os.path.join(OUT, "scores_val_scoring.json"), g)
     run_eval(ck, "test", 10, os.path.join(OUT, "scores_test_scoring.json"), g)
+    pct = [q.lstrip("p") for q in a.taus]
     subprocess.run([PY, os.path.join(C, "curation/select/select_subsets.py"), "--scores",
-                    os.path.join(OUT, "scores_train.json"), "--manifest", man, "--out", SUB], check=True,
+                    os.path.join(OUT, "scores_train.json"), "--manifest", man, "--out", SUB, "--percentiles", *pct], check=True,
                    stdout=open(os.path.join(OUT, "subsets.log"), "w"), stderr=subprocess.STDOUT)
     log("tau candidates: " + json.dumps({k: round(v, 3) for k, v in json.load(open(os.path.join(SUB, "tau_candidates.json"))).items()}))
 
@@ -208,15 +215,15 @@ def main():
         futures.append(pool.submit(run_eval, final_ckpt(name), "val", 30,
                                    os.path.join(OUT, f"scores_val_{name.rsplit('_', 1)[1]}.json"), gpu))
 
-    taus = [S.submit(f"{T}_tau_{q}", a.tau_steps, prio=1, clips=os.path.join(SUB, f"curated_{q}.json"), restore=ck,
-                     on_done=val_eval) for q in TAUS]
+    taus = [S.submit(f"{T}_tau_{q}", a.tau_steps, prio=1, clips=os.path.join(SUB, f"curated_{q}.json"),
+                     restore=None if a.tau_from_scratch else ck, on_done=val_eval) for q in a.taus]
     S.wait_for(taus)
     while futures:
         futures.pop().result()
 
     # 4. τ*
     rows = []
-    for q in TAUS:
+    for q in a.taus:
         sc = json.load(open(os.path.join(OUT, f"scores_val_{q}.json")))["clips"]
         rows.append((q, float(np.mean([v["score"] for v in sc.values()])),
                      len(json.load(open(os.path.join(SUB, f"curated_{q}.json"))))))
@@ -226,7 +233,7 @@ def main():
     subset = lambda q: json.load(open(os.path.join(SUB, f"curated_{q}.json")))  # noqa: E731
     json.dump({"candidates": [{"tau": q, "value": cands[q], "mean_val_score": m, "clips": n,
                                "corrupted_kept": sum(i in contam for i in subset(q))} for q, m, n in rows],
-               "tie_band": TIE, "tau_star": pick[0], "tau_value": cands[pick[0]]},
+               "tie_band": TIE, "from_scratch": a.tau_from_scratch, "tau_star": pick[0], "tau_value": cands[pick[0]]},
               open(os.path.join(OUT, "tau_choice.json"), "w"), indent=1)
     log("tau: " + ", ".join(f"{q} {m:.3f} ({n} clips{contam_note(subset(q))})" for q, m, n in rows)
         + f" -> tau* = {pick[0]}")
@@ -234,10 +241,11 @@ def main():
     # 5. matched subsets and the final runs
     subprocess.run([PY, os.path.join(C, "curation/select/select_subsets.py"), "--scores",
                     os.path.join(OUT, "scores_train.json"), "--manifest", man, "--out", SUB, "--match",
-                    os.path.join(SUB, f"curated_{pick[0]}.json"), "--seeds", *map(str, SEEDS)], check=True,
+                    os.path.join(SUB, f"curated_{pick[0]}.json"), "--seeds", *map(str, SEEDS), "--percentiles", *pct],
+                   check=True,
                    stdout=open(os.path.join(OUT, "subsets.log"), "a"), stderr=subprocess.STDOUT)
     clips = {"curated": lambda s: f"curated_{pick[0]}.json", "random": lambda s: f"random_s{s}.json",
-             "kinematic": lambda s: "kinematic.json"}
+             "kinematic": lambda s: "kinematic.json", "checked": lambda s: "checked.json"}
     clips = {k: v for k, v in clips.items() if k == "curated" or k in a.conds}
     for s in SEEDS:
         for cond, f in clips.items():
@@ -256,16 +264,19 @@ def main():
     for tag, _ in TESTS:
         conds = [f"{c}=" + ",".join(os.path.join(TEST, f"{c}_s{s}_{tag}.json") for s in SEEDS)
                  for c in ["full", *clips]]
-        for suffix, ex in (("", []), ("_gaits", ["--exclude-category", *STATIONARY])):
+        for (suffix, ex), metric in [(x, mt) for mt in ("score", "score_v2")
+                                     for x in (("", []), ("_gaits", ["--exclude-category", *STATIONARY]))]:
+            if metric != "score":
+                suffix += f"_{metric}"
             out = os.path.join(OUT, f"comparison_{tag}{suffix}.md")
-            subprocess.run([PY, cc, "--manifest", man, "--cond", *conds, *ex, "--strata-scores",
+            subprocess.run([PY, cc, "--manifest", man, "--cond", *conds, *ex, "--metric", metric, "--strata-scores",
                             os.path.join(OUT, "scores_test_scoring.json"), "--tau", str(tau_v), "--title",
                             f"Study {T}, test clips, {tag}{', gaits only' if ex else ''}", "--out", out], check=True,
                            capture_output=True)
             body = open(out).read().split("\n")
             keep = [ln for ln in body if (ln.startswith("| ") and not ln.startswith(("| `", "| clip "))) or
                     ln.startswith(("- ", "**", "## Secondary"))]
-            summary += [f"## {tag}{' (gaits only)' if ex else ''}", "", *keep, ""]
+            summary += [f"## {tag}{' (gaits only)' if ex else ''}{'' if metric == 'score' else ', ' + metric}", "", *keep, ""]
     curves = subprocess.run([PY, os.path.join(C, "curation/analysis/compare_runs.py"), "--runs",
                              *[os.path.join(RUNS, n) for n in finals.values()], "--at", "50", "100", "200",
                              "--terms", "legs", "keypoints", "alive"], cwd=PG, capture_output=True, text=True).stdout

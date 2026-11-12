@@ -11,6 +11,10 @@ delay) with a trained checkpoint, deterministic actions, every requested clip fr
   joint_lim    fraction of steps with any joint within 0.02 rad of its range end
   score        PREREG P.2 draft: mean over the WHOLE clip of (legs_rms / tau_dof + keypoints / tau_key); each frame after a
                fall counts E_FAIL. Lower is better.
+  pos_err / yaw_err (m, rad): where the robot is against where the clip goes. Mean over the frames played of the base xy
+               distance and the heading difference to the reference, both taken relative to the start (the reference
+               turned by the random start yaw). The score above is blind to these (it is body-relative).
+  score_v2     score plus pos_err / tau_pos + yaw_err / tau_yaw per frame, same fall rule (judging only, not selection)
 
   cd Open_Duck_Playground && .venv/bin/python ../open-duck-curation/curation/eval/eval_clips.py \
       --ckpt <run>/<checkpoint dir> --clips all|train|val|test|<ids.json> --rollouts 10 --out scores.json
@@ -34,6 +38,7 @@ from orbax import checkpoint as ocp  # noqa: E402
 from playground.open_duck_mini_v2 import tracking  # noqa: E402
 
 TAU_DOF, TAU_KEY, E_FAIL = 0.10, 0.02, 3.0
+TAU_POS, TAU_YAW = 0.05, 0.2  # m, rad
 PUSH_T = 1.5  # s, P.7
 
 
@@ -71,6 +76,12 @@ def load_policy(ckpt, env):
     return make((norm, params[1]), deterministic=True)
 
 
+def yaw_of(q):
+    """Heading of (w, x, y, z) quaternions (last axis)."""
+    w, x, y, z = q[..., 0], q[..., 1], q[..., 2], q[..., 3]
+    return jp.arctan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
+
+
 def evaluate(ckpt, ids, rollouts, seed=0, push=0.0, friction=1.0):
     """push: lateral base-velocity kick (m/s) at t = PUSH_T, +y on even rollouts and -y on odd ones (P.7);
     friction: scale on every geom's friction."""
@@ -104,10 +115,15 @@ def evaluate(ckpt, ids, rollouts, seed=0, push=0.0, friction=1.0):
         rec["torque_sat"] = jp.any(jp.abs(nst.data.actuator_force) >= 0.95 * fmax, axis=-1).astype(jp.float32)
         rec["joint_lim"] = jp.any((q < lo + 0.02) | (q > hi - 0.02), axis=-1).astype(jp.float32)
         rec["alive"] = alive
+        rec["xy"] = nst.data.qpos[:, :2]
+        rec["yaw"] = yaw_of(nst.data.qpos[:, 3:7])
         alive = alive * (1.0 - nst.done)
         return (nst, alive, key), rec
 
     st = reset(keys, clips)
+    xy0, yaw0 = np.asarray(st.data.qpos[:, :2]), np.asarray(yaw_of(st.data.qpos[:, 3:7]))
+    ref_xy = np.asarray(env._ref_pos[..., :2])  # (clips, frames, 2)
+    ref_yaw = np.unwrap(np.asarray(yaw_of(env._ref_quat)), axis=1)
     run = jax.jit(lambda st: jax.lax.scan(one_step, (st, jp.ones(n * rollouts), jax.random.PRNGKey(seed + 1)), jp.arange(T - 1))[1])
     rec = jax.tree_util.tree_map(np.asarray, run(st))  # (T-1, n*R)
     L = np.asarray(env._ref_len)[np.asarray(clips)] - 1
@@ -121,10 +137,21 @@ def evaluate(ckpt, ids, rollouts, seed=0, push=0.0, friction=1.0):
             played = int(alive.sum())
             fell = bool(rec["fell"][:Lr, r][alive].max() > 0.5) if played else True
             e = rec["err/legs_rms"][:Lr, r] / TAU_DOF + rec["err/keypoints"][:Lr, r] / TAU_KEY
-            e = np.where(alive, e, E_FAIL)
+            # rollout r starts at the reference's frame 0 turned by its random yaw; scan step t is frame t + 1
+            rot = yaw0[r] - ref_yaw[ci, 0]
+            c, s = np.cos(rot), np.sin(rot)
+            d = ref_xy[ci, 1:Lr + 1] - ref_xy[ci, 0]
+            want = xy0[r] + np.stack([c * d[:, 0] - s * d[:, 1], s * d[:, 0] + c * d[:, 1]], -1)
+            e_pos = np.linalg.norm(rec["xy"][:Lr, r] - want, axis=-1)
+            e_yaw = np.abs(np.angle(np.exp(1j * (rec["yaw"][:Lr, r] - ref_yaw[ci, 1:Lr + 1] - rot))))
+            e2 = e + e_pos / TAU_POS + e_yaw / TAU_YAW
+            e, e2 = np.where(alive, e, E_FAIL), np.where(alive, e2, E_FAIL)
             if fell:  # the fall step itself and everything after it
                 e[max(played - 1, 0):] = E_FAIL
-            per.append(dict(completion=played / Lr, fell=fell, score=float(e.mean()),
+                e2[max(played - 1, 0):] = E_FAIL
+            per.append(dict(completion=played / Lr, fell=fell, score=float(e.mean()), score_v2=float(e2.mean()),
+                            pos_err=float(e_pos[alive].mean()) if played else float("nan"),
+                            yaw_err=float(e_yaw[alive].mean()) if played else float("nan"),
                             **{k.split("/")[-1]: float(rec[k][:Lr, r][alive].mean()) if played else float("nan")
                                for k in ("err/legs_rms", "err/head_rms", "err/keypoints", "err/lin_vel", "err/yaw_rate")},
                             torque_sat=float(rec["torque_sat"][:Lr, r][alive].mean()) if played else float("nan"),
@@ -150,11 +177,13 @@ def main():
     ids = clip_ids(man, a.clips)
     res = evaluate(a.ckpt, ids, a.rollouts, a.seed, a.push, a.friction)
     cat = {c["id"]: (c["category"], c["split"]) for c in man["clips"]}
-    print(f"{'clip':52s} {'split':5s} {'compl':>6s} {'falls':>5s} {'legs':>6s} {'kp cm':>6s} {'vel':>6s} {'yaw':>6s} {'score':>6s}")
+    print(f"{'clip':52s} {'split':5s} {'compl':>6s} {'falls':>5s} {'legs':>6s} {'kp cm':>6s} {'vel':>6s} {'yaw':>6s} {'pos cm':>6s} {'hdg':>6s} {'score':>6s} {'v2':>6s}")
     for cid, r in sorted(res.items(), key=lambda kv: kv[1]["score"]):
         print(f"{cid[:52]:52s} {cat[cid][1]:5s} {r['completion']:6.2f} {r['falls']:3d}/{r['rollouts']:<2d} {r['legs_rms']:6.3f} "
-              f"{100 * r['keypoints']:6.2f} {r['lin_vel']:6.3f} {r['yaw_rate']:6.3f} {r['score']:6.2f}")
+              f"{100 * r['keypoints']:6.2f} {r['lin_vel']:6.3f} {r['yaw_rate']:6.3f} "
+              f"{100 * r['pos_err']:6.2f} {r['yaw_err']:6.3f} {r['score']:6.2f} {r['score_v2']:6.2f}")
     json.dump({"ckpt": "/".join(os.path.abspath(a.ckpt).split("/")[-2:]), "tau_dof": TAU_DOF, "tau_key": TAU_KEY, "e_fail": E_FAIL,
+               "tau_pos": TAU_POS, "tau_yaw": TAU_YAW,
                "rollouts": a.rollouts, "push_m_s": a.push, "friction_scale": a.friction, "clips": res}, open(a.out, "w"), indent=1)
     print("wrote", a.out)
 

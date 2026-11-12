@@ -24,9 +24,12 @@ import numpy as np
 B = 10_000
 
 
-def load(paths):
+def load(paths, metric="score"):
     runs = [json.load(open(p))["clips"] for p in paths.split(",")]
     ids = sorted(set.intersection(*(set(r) for r in runs)))
+    for r in runs:
+        for i in ids:
+            r[i]["score"] = r[i][metric]
     out = {i: {k: float(np.mean([r[i][k] for r in runs])) for k in ("score", "completion", "falls")} for i in ids}
     for i in ids:
         out[i]["seeds"] = np.array([r[i]["score"] for r in runs])
@@ -94,18 +97,19 @@ def main():
     p.add_argument("--exclude-category", nargs="*", default=[])
     p.add_argument("--strata-scores", default=None, help="eval_clips.py JSON of the test clips under the scoring policy")
     p.add_argument("--tau", type=float, default=None)
+    p.add_argument("--metric", default="score", help="per-clip key to compare (score, score_v2, pos_err, yaw_err)")
     p.add_argument("--title", default="Test-set comparison")
     p.add_argument("--out", required=True)
     a = p.parse_args()
     man = json.load(open(a.manifest))
     cat = {c["id"]: c["category"] for c in man["clips"]}
     conds = dict(kv.split("=", 1) for kv in a.cond)
-    res = {k: load(v) for k, v in conds.items()}
+    res = {k: load(v, a.metric) for k, v in conds.items()}
     ids = sorted(set.intersection(*(set(r) for r in res.values())))
     ids = [i for i in ids if cat[i] not in a.exclude_category]
     cats = sorted(set(cat[i] for i in ids))
     rng = np.random.default_rng(0)
-    L = [f"# {a.title}", "", f"{len(ids)} test clips, {len(cats)} categories"
+    L = [f"# {a.title}", "", f"{len(ids)} test clips, {len(cats)} categories, metric `{a.metric}`"
          + (f" (excluded: {', '.join(a.exclude_category)})" if a.exclude_category else "") + ". Lower e is better.", "",
          "## Per condition", "", "| condition | mean e | completion | falls / clip | coverage |", "|---|---|---|---|---|"]
     for k, r in res.items():

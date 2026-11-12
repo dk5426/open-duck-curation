@@ -7,6 +7,7 @@ library manifest. Output (JSON, one file per subset, each a list of clip ids, us
   random_s<seed>.json  P.5: uniform draws matched in duration to a given curated set (one per seed)
   kinematic.json       optional baseline: same size as the curated set, ranked by a kinematic-only score
                        (peak joint speed / servo speed + hip-roll demand + joint-limit closeness), same coverage rule
+  checked.json         every train clip that passes the library's kinematic check (the cheap filter alone)
 
   python select_subsets.py --scores scores_train.json --manifest data/clips_v1/manifest.json --out subsets/ \
       [--match curated_p70.json --seeds 0 1 2]
@@ -77,6 +78,7 @@ def main():
     p.add_argument("--out", required=True)
     p.add_argument("--match", default=None, help="curated subset file to match random / kinematic subsets to")
     p.add_argument("--seeds", type=int, nargs="*", default=[0, 1, 2])
+    p.add_argument("--percentiles", type=int, nargs="+", default=list(PERCENTILES))
     a = p.parse_args()
     os.makedirs(a.out, exist_ok=True)
     man = json.load(open(a.manifest))
@@ -84,13 +86,16 @@ def main():
     train = {c["id"] for c in man["clips"] if c["split"] == "train"}
     assert set(scores) <= train, "scores must be for train clips only"
     vals = np.array([scores[i]["score"] for i in scores])
-    cands = {f"p{q}": float(np.percentile(vals, q)) for q in PERCENTILES}
+    cands = {f"p{q}": float(np.percentile(vals, q)) for q in a.percentiles}
     json.dump(cands, open(os.path.join(a.out, "tau_candidates.json"), "w"), indent=1)
     print("train scores:", ", ".join(f"{i}={scores[i]['score']:.2f}" for i in sorted(scores, key=lambda k: scores[k]['score'])))
     for name, tau in cands.items():
         sub = curate(scores, man, tau)
         json.dump(sub, open(os.path.join(a.out, f"curated_{name}.json"), "w"), indent=1)
         print(f"tau {name} = {tau:.3f}: curated {len(sub)} clips")
+    checked = sorted(c["id"] for c in man["clips"] if c["split"] == "train" and c["check"]["pass"])
+    json.dump(checked, open(os.path.join(a.out, "checked.json"), "w"), indent=1)
+    print(f"checked: {len(checked)} clips")
     if a.match:
         ref = json.load(open(a.match))
         length = {c["id"]: c["length"] for c in man["clips"]}
