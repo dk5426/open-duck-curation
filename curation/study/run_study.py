@@ -17,7 +17,8 @@ Steps (each skipped if its output already exists, so the driver can be restarted
   5. curated, random (one draw per seed), kinematic and checked (passes the kinematic check) subsets; 200M from
      scratch, seeds 0/1/2
   6. test evaluation of every final policy: nominal, push 0.3 / 0.6 m/s, friction x 0.6 (10 rollouts each)
-  7. compare_conditions.py per perturbation (all clips and gaits only; score, and score_v2 with position / heading)
+  7. compare_conditions.py per perturbation (all clips and gaits only; score, score_v2 with position / heading, score_v3 and
+     tilt_err with whole-body tilt)
      and training curves; SUMMARY.md, DONE
 With a contaminated library, the log, tau_choice.json and SUMMARY.md also say how many corrupted clips each subset kept.
 Results go to open-duck-curation/results/<tag>/; runs to runs/<tag>_*.
@@ -264,7 +265,7 @@ def main():
     for tag, _ in TESTS:
         conds = [f"{c}=" + ",".join(os.path.join(TEST, f"{c}_s{s}_{tag}.json") for s in SEEDS)
                  for c in ["full", *clips]]
-        for (suffix, ex), metric in [(x, mt) for mt in ("score", "score_v2")
+        for (suffix, ex), metric in [(x, mt) for mt in ("score", "score_v2", "score_v3", "tilt_err")
                                      for x in (("", []), ("_gaits", ["--exclude-category", *STATIONARY]))]:
             if metric != "score":
                 suffix += f"_{metric}"

@@ -22,7 +22,7 @@ C = os.path.join(ROOT, "open-duck-curation")
 RUNS = os.path.join(ROOT, "runs")
 PY = os.path.join(PG, ".venv", "bin", "python")
 TESTS = (("nominal", []), ("push03", ["--push", "0.3"]), ("push06", ["--push", "0.6"]), ("fric06", ["--friction", "0.6"]))
-METRICS = ("score_v2", "pos_err", "yaw_err", "score")
+METRICS = ("score_v2", "pos_err", "yaw_err", "score", "score_v3", "tilt_err")
 STATIONARY = ("crouch", "bow", "sway", "head")
 
 

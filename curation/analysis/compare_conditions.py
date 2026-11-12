@@ -97,7 +97,7 @@ def main():
     p.add_argument("--exclude-category", nargs="*", default=[])
     p.add_argument("--strata-scores", default=None, help="eval_clips.py JSON of the test clips under the scoring policy")
     p.add_argument("--tau", type=float, default=None)
-    p.add_argument("--metric", default="score", help="per-clip key to compare (score, score_v2, pos_err, yaw_err)")
+    p.add_argument("--metric", default="score", help="per-clip key to compare (score, score_v2, score_v3, pos_err, yaw_err, tilt_err)")
     p.add_argument("--title", default="Test-set comparison")
     p.add_argument("--out", required=True)
     a = p.parse_args()

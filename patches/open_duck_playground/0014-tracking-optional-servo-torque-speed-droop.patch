@@ -1,0 +1,64 @@
+From: Dhawal Kabra <dk5426@nyu.edu>
+Subject: [PATCH] tracking: optional servo torque-speed droop (servo_droop, default off)
+
+---
+diff --git a/playground/open_duck_mini_v2/tracking.py b/playground/open_duck_mini_v2/tracking.py
+index 8b13ab3..4a0d790 100644
+--- a/playground/open_duck_mini_v2/tracking.py
++++ b/playground/open_duck_mini_v2/tracking.py
+@@ -59,6 +59,11 @@ def default_config() -> config_dict.ConfigDict:
+         ref_feedforward=True,
+         dof_vel_scale=0.05,
+         max_motor_velocity=5.24,
++        # Servo torque-speed droop (STS3215): the torque available in the direction of motion falls linearly from the
++        # force limit to 0 at servo_no_load_speed (rad/s), applied every physics substep; braking keeps the full
++        # torque. False = the stock model (torque cap + target rate limit only).
++        servo_droop=False,
++        servo_no_load_speed=4.7,
+         rsi_prob=0.5,           # reference-state initialisation: start mid-clip half the time
+         rsi_tail=60,            # never start in the last 60 frames
+         terminate_tilt=0.6,     # end the episode when gravity's body-z component drops below this (~53 deg)
+@@ -135,6 +140,10 @@ class Tracking(open_duck_mini_v2_base.OpenDuckMiniV2Env):
+         self._ctrl_hi = jp.array(m.actuator_ctrlrange[:, 1])
+         self._nu = m.nu
+         self._home_z = float(m.keyframe("home").qpos[2])
++        self._act_qadr = jp.array(m.jnt_qposadr[m.actuator_trnid[:, 0]])
++        self._act_dadr = jp.array(m.jnt_dofadr[m.actuator_trnid[:, 0]])
++        self._act_kp = jp.array(m.actuator_gainprm[:, 0])
++        self._act_tmax = jp.array(m.actuator_forcerange[:, 1])
+ 
+         lib, man = load_library()
+         self._manifest = man
+@@ -267,6 +276,20 @@ class Tracking(open_duck_mini_v2_base.OpenDuckMiniV2Env):
+         reward, done = jp.zeros(2)
+         return mjx_env.State(data, obs, reward, done, metrics, info)
+ 
++    def _droop_step(self, data, tgt):
++        """Physics substeps with the servo torque-speed droop: the position servo's torque kp * (ctrl - q) is capped
++        at tmax * (1 - |qd| / v0) when it pushes along the motion, by moving ctrl toward q."""
++        v0 = self._config.servo_no_load_speed
++
++        def sub(d, _):
++            q, qd = d.qpos[self._act_qadr], d.qvel[self._act_dadr]
++            tau = self._act_kp * (tgt - q)
++            cap = jp.where(tau * qd > 0, self._act_tmax * jp.clip(1.0 - jp.abs(qd) / v0, 0.0, 1.0), self._act_tmax)
++            ctrl = q + jp.clip(tau, -cap, cap) / self._act_kp
++            return mjx.step(self.mjx_model, d.replace(ctrl=ctrl)), None
++
++        return jax.lax.scan(sub, data, (), self.n_substeps)[0]
++
+     # --------------------------------------------------------------------- step
+     def step(self, state: mjx_env.State, action: jax.Array) -> mjx_env.State:
+         info = state.info
+@@ -280,7 +303,10 @@ class Tracking(open_duck_mini_v2_base.OpenDuckMiniV2Env):
+         tgt = jp.clip(base_q + act * self._config.action_scale, self._ctrl_lo, self._ctrl_hi)
+         lim = self._config.max_motor_velocity * self.dt
+         tgt = jp.clip(tgt, info["motor_targets"] - lim, info["motor_targets"] + lim)
+-        data = mjx_env.step(self.mjx_model, state.data, tgt, self.n_substeps)
++        if self._config.servo_droop:
++            data = self._droop_step(state.data, tgt)
++        else:
++            data = mjx_env.step(self.mjx_model, state.data, tgt, self.n_substeps)
+         info["motor_targets"] = tgt
+         info["frame"] = info["frame"] + 1
+ 
