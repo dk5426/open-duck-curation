@@ -73,6 +73,25 @@ def main():
         L.append(f"| {m} | {v['auc']:.3f} | {', '.join(f'{x:.3f}' for x in v['auc_per_scorer'])} | "
                  f"{', '.join(f'{x:.2f}' for x in v['spearman_between_scorers'])} |")
     L += ["", f"Selection score: **{sv['selection_score']}** (highest AUC; within {sv['tie']} the original score wins).", ""]
+    # label stability (curation/clips/label_stability.py): AUCs and kept counts without the borderline clips
+    stab = json.load(open(os.path.join(a.lib, "label_stability.json")))["clips"]
+    border = {i for i, v in stab.items() if v["borderline"]}
+    L += [f"Label stability: {len(border)} of {len(stab)} held poses are borderline (< 80% of 27 perturbed hold tests "
+          f"agree with the label): {', '.join(f'`{i}`' for i in sorted(border)) or 'none'}.", ""]
+    if border:
+        per = [json.load(open(os.path.join(OUT, x)))["clips"] for x in sorted(os.listdir(OUT))
+               if x.startswith("scores_train_s")]
+        keep = [i for i in infeasible if i not in border]
+        L += ["| candidate | AUC without the borderline clips (mean over scorers) |", "|---|---|"]
+        for m in sv["candidates"]:
+            vals = []
+            for sc in per:
+                x = np.array([sc[i]["falls"] / sc[i]["rollouts"] if m == "fall_rate" else sc[i][m] for i in keep])
+                y = np.array([infeasible[i] for i in keep])
+                pos, neg = x[y], x[~y]
+                vals.append(float(((pos[:, None] > neg[None]) + 0.5 * (pos[:, None] == neg[None])).mean()))
+            L.append(f"| {m} | {np.mean(vals):.3f} |")
+        L.append("")
 
     # 2. composition
     L += ["## Subsets: clean clips, leans and measured-infeasible clips kept", "", "| selector | " +
@@ -83,7 +102,7 @@ def main():
             name = f"{s_}_f{f}" + ("_s0" if s_ == "random" else "")
             ids = json.load(open(os.path.join(SUB, name + ".json")))
             row.append(f"{len(ids)} clips: {sum(cat[i] != 'lean' for i in ids)} clean, {sum(cat[i] == 'lean' for i in ids)} leans, "
-                       f"{sum(infeasible[i] for i in ids)} infeasible")
+                       f"{sum(infeasible[i] for i in ids)} infeasible, {sum(i in border for i in ids)} borderline")
         L.append(f"| {s_}{' (seed 0)' if s_ == 'random' else ''} | " + " | ".join(row) + " |")
     L.append("")
 

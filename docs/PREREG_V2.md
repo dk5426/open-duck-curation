@@ -164,3 +164,10 @@ Phase 3 result exists.
 - 2026-11-15, same amendment: added `checked`, every clip passing the kinematic check at its natural size (73 clips),
   3 seeds, evaluated like the main fraction and compared with curated at 55% (no pass bar). This is how the check is
   used in practice; a pass / fail filter forced to a fixed fraction only pads with random clips.
+- 2026-11-15, before any v7 result: label stability (`curation/clips/label_stability.py`, `<lib>/label_stability.json`).
+  Every held pose was re-tested under 27 perturbations: friction × 0.8 / 1 / 1.2, servo gains × 0.9 / 1 / 1.1, test frame
+  ±5, and 3 s holds. A clip is borderline when fewer than 80% of these agree with its label. Result: 1 of 55 is borderline
+  (`lean__33`, +5.1 cm, labelled feasible, fails 44% of perturbed tests). Every other label agrees in all 27. The analysis
+  reports the selection AUCs without borderline clips and how many each subset keeps. The dataset and its labels are
+  unchanged. Remaining caveat: the hold test is static, so it does not test the move into the pose or active balance.
+

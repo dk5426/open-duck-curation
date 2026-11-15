@@ -27,7 +27,7 @@ TILT_DEG, DROP_M, SLIDE_M = 20.0, 0.03, 0.05  # fail = trunk rotated 20 deg from
 SOLES = ("left_foot_bottom_tpu", "right_foot_bottom_tpu")
 
 
-def hold(m, d, qadr, q, pos, quat, contacts):
+def hold(m, d, qadr, q, pos, quat, contacts, hold_s=HOLD_S):
     soles = [m.geom(n).id for n in SOLES]
     floor = m.geom("floor").id
     mujoco.mj_resetData(m, d)
@@ -35,7 +35,7 @@ def hold(m, d, qadr, q, pos, quat, contacts):
     d.ctrl[:] = q
     mujoco.mj_forward(m, d)
     p0, R0 = d.qpos[0:3].copy(), d.xmat[1].reshape(3, 3).copy()
-    for k in range(int(HOLD_S / m.opt.timestep)):
+    for k in range(int(hold_s / m.opt.timestep)):
         mujoco.mj_step(m, d)
         tilt = np.degrees(np.arccos(np.clip((R0[:, 2] @ d.xmat[1].reshape(3, 3)[:, 2]), -1, 1)))
         drop, slide = p0[2] - d.qpos[2], np.linalg.norm(d.qpos[0:2] - p0[0:2])
