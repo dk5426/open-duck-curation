@@ -152,3 +152,6 @@ Phase 3 result exists.
 
 ## Amendments
 - 2026-11-15: approved by Dhawal Kabra in chat before any v7 result; team signatures to follow.
+- 2026-11-15, before any v7 result: training cost also reports each selector's own overhead. For curated, that is the
+  three scoring policies' GPU-hours plus scoring the train clips; the kinematic check and hold test take seconds of
+  CPU. Curation's total compute is compared with the cheap filters' on that basis.

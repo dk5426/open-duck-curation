@@ -169,6 +169,19 @@ def main():
         L.append(f"| {cond} | {np.mean(hrs):.2f} | {np.nanmean(sph):.0f} | {' / '.join(f'{x:.3f}' for x in pts)} | "
                  f"{', '.join('—' if np.isnan(x) else f'{x:.0f}' for x in reach)} | "
                  f"{', '.join('—' if np.isnan(x) else f'{x:.2f}' for x in reach_h)} |")
+    # selection overhead: what each selector costs before any final policy trains
+    sc_h = []
+    for x in sorted(os.listdir(RUNS)):
+        if x.startswith(f"{T}_score_s"):
+            ct = ckpt_times(x)
+            sc_h.append((ct[-1][1] - ct[0][1]).total_seconds() / 3600)
+    ev = [ln for ln in open(os.path.join(OUT, "study.log")) if "scores_train_s" in ln and " eval " in ln]
+    L += ["", "**Selection overhead** (paid once, before any final policy trains):", "",
+          f"- curated: {len(sc_h)} scoring policies, {sum(sc_h):.1f} GPU-h of training "
+          f"({', '.join(f'{h:.2f}' for h in sc_h)} h), plus scoring every train clip with each ({len(ev)} evaluations)",
+          "- kinematic: the kinematic check, seconds of CPU", "- oracle (physics filter): the hold test, about a "
+          "second of CPU per clip", "- random, full: none",
+          "", "Total GPU-h per condition at this fraction = 3 seeds × wall-clock above, plus the overhead for curated."]
     open(os.path.join(OUT, "SUMMARY.md"), "w").write("\n".join(L) + "\n")
     print("wrote", os.path.join(OUT, "SUMMARY.md"))
 
