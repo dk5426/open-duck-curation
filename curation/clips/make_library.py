@@ -342,6 +342,13 @@ def stationary_clip(m, d, qadr, kind, src, var):
             hq[:, 2] += 0.5 * w
         elif src == "tilt":
             hq[:, 3] += 0.3 * w
+        elif src == "nod_tilt":  # v7 test source: nod and tilt in phase, each at its training amplitude
+            hq[:, 1] += 0.4 * w
+            hq[:, 3] += 0.3 * w
+        elif src == "look_tilt":  # v7 test source: look_around with a tilt
+            hq[:, 2] += 0.5 * np.sin(np.pi * f * t) * env
+            hq[:, 1] += -0.2 * env
+            hq[:, 3] += 0.3 * w
         else:  # look_around: yaw sweep with the head pitched down a little
             hq[:, 2] += 0.5 * np.sin(np.pi * f * t) * env
             hq[:, 1] += -0.2 * env

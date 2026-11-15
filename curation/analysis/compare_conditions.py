@@ -14,6 +14,10 @@ for test clips the scoring policy tracks within τ ("trackable") and beyond it. 
 whether their motion parameters lie inside the range the category's training clips cover.
 
 Each value may be a comma-separated list of JSON files (one per seed).
+
+--group source (PREREG v2): the bootstrap resamples whole motion sources (a source's variants move together), then one
+seed per condition within each drawn clip; --loo adds a leave-one-clip-out table (the overall Δe and its CI with each
+test clip dropped in turn: the range shows whether one clip decides the result).
 """
 
 import argparse
@@ -36,16 +40,29 @@ def load(paths, metric="score"):
     return out
 
 
-def boot_ci(ref, oth, rng):
-    """95% CI of mean(ref - oth): clips resampled, then one seed per condition drawn within each drawn clip."""
+GROUPS = None  # clip index -> group index, set by main() with --group source
+
+
+def boot_ci(ref, oth, rng, groups=None):
+    """95% CI of mean(ref - oth): clips (or, with groups, whole groups of clips) resampled, then one seed per condition
+    drawn within each drawn clip."""
     n = len(ref)
     if n < 2:
         return float("nan"), float("nan")
     a, b = np.stack(ref), np.stack(oth)  # (clips, seeds)
-    c = rng.integers(0, n, size=(B, n))
-    sa = rng.integers(0, a.shape[1], size=(B, n))
-    sb = rng.integers(0, b.shape[1], size=(B, n))
-    m = (a[c, sa] - b[c, sb]).mean(1)
+    if groups is None:
+        c = rng.integers(0, n, size=(B, n))
+    else:
+        members = [np.where(groups == g)[0] for g in np.unique(groups)]
+        draws = rng.integers(0, len(members), size=(B, len(members)))
+        c = [np.concatenate([members[g] for g in row]) for row in draws]
+        L = max(len(x) for x in c)  # pad with -1, masked below
+        c = np.stack([np.pad(x, (0, L - len(x)), constant_values=-1) for x in c])
+    mask = c >= 0
+    cc = np.where(mask, c, 0)
+    sa = rng.integers(0, a.shape[1], size=cc.shape)
+    sb = rng.integers(0, b.shape[1], size=cc.shape)
+    m = ((a[cc, sa] - b[cc, sb]) * mask).sum(1) / mask.sum(1)
     return float(np.percentile(m, 2.5)), float(np.percentile(m, 97.5))
 
 
@@ -84,12 +101,17 @@ def delta_table(res, ref, ids, rng):
         if k == ref or not ids:
             continue
         d = np.mean([res[ref][i]["score"] - res[k][i]["score"] for i in ids])
-        lo, hi = boot_ci([res[ref][i]["seeds"] for i in ids], [res[k][i]["seeds"] for i in ids], rng)
+        lo, hi = boot_ci([res[ref][i]["seeds"] for i in ids], [res[k][i]["seeds"] for i in ids], rng, grp_of(ids))
         rows.append(f"| {k} | {len(ids)} | {d:+.3f} [{lo:+.3f}, {hi:+.3f}] |")
     return rows
 
 
+def grp_of(ids):
+    return None if GROUPS is None else np.unique([GROUPS[i] for i in ids], return_inverse=True)[1]
+
+
 def main():
+    global GROUPS
     p = argparse.ArgumentParser()
     p.add_argument("--manifest", required=True)
     p.add_argument("--cond", nargs="+", required=True, help="name=file[,file...]")
@@ -98,18 +120,23 @@ def main():
     p.add_argument("--strata-scores", default=None, help="eval_clips.py JSON of the test clips under the scoring policy")
     p.add_argument("--tau", type=float, default=None)
     p.add_argument("--metric", default="score", help="per-clip key to compare (score, score_v2, score_v3, pos_err, yaw_err, tilt_err)")
+    p.add_argument("--group", choices=("clip", "source"), default="clip", help="bootstrap unit")
+    p.add_argument("--loo", action="store_true", help="leave-one-clip-out sensitivity table")
     p.add_argument("--title", default="Test-set comparison")
     p.add_argument("--out", required=True)
     a = p.parse_args()
     man = json.load(open(a.manifest))
     cat = {c["id"]: c["category"] for c in man["clips"]}
+    if a.group == "source":
+        GROUPS = {c["id"]: c["source"] for c in man["clips"]}
     conds = dict(kv.split("=", 1) for kv in a.cond)
     res = {k: load(v, a.metric) for k, v in conds.items()}
     ids = sorted(set.intersection(*(set(r) for r in res.values())))
     ids = [i for i in ids if cat[i] not in a.exclude_category]
     cats = sorted(set(cat[i] for i in ids))
     rng = np.random.default_rng(0)
-    L = [f"# {a.title}", "", f"{len(ids)} test clips, {len(cats)} categories, metric `{a.metric}`"
+    L = [f"# {a.title}", "", f"{len(ids)} test clips ({len(set(GROUPS[i] for i in ids)) if GROUPS else len(ids)} "
+         f"bootstrap units: {a.group}s), {len(cats)} categories, metric `{a.metric}`"
          + (f" (excluded: {', '.join(a.exclude_category)})" if a.exclude_category else "") + ". Lower e is better.", "",
          "## Per condition", "", "| condition | mean e | completion | falls / clip | coverage |", "|---|---|---|---|---|"]
     for k, r in res.items():
@@ -123,7 +150,7 @@ def main():
         if k == a.ref:
             continue
         d = np.array([res[a.ref][i]["score"] - res[k][i]["score"] for i in ids])
-        lo, hi = boot_ci([res[a.ref][i]["seeds"] for i in ids], [res[k][i]["seeds"] for i in ids], rng)
+        lo, hi = boot_ci([res[a.ref][i]["seeds"] for i in ids], [res[k][i]["seeds"] for i in ids], rng, grp_of(ids))
         per = []
         for c in cats:
             dc = np.array([res[a.ref][i]["score"] - res[k][i]["score"] for i in ids if cat[i] == c])
@@ -139,6 +166,24 @@ def main():
               f"- worst per-category completion drop vs full: {worst:+.3f} (bar: ≥ −0.05): "
               f"**{'yes' if worst >= -0.05 else 'no'}**",
               f"- **pass: {'yes' if all(ok for _, ok in passes) and worst >= -0.05 else 'no'}**"]
+    if a.loo:
+        L += ["", f"## Leave-one-clip-out: {a.ref} minus each condition with each test clip dropped", "",
+              "| vs | Δe range | CI upper bound range | drops that flip the CI past 0 |", "|---|---|---|---|"]
+        rl = np.random.default_rng(2)
+        for k in res:
+            if k == a.ref:
+                continue
+            ds, his, flips = [], [], []
+            _, full_hi = boot_ci([res[a.ref][i]["seeds"] for i in ids], [res[k][i]["seeds"] for i in ids], rl, grp_of(ids))
+            for drop in ids:
+                sub = [i for i in ids if i != drop]
+                ds.append(np.mean([res[a.ref][i]["score"] - res[k][i]["score"] for i in sub]))
+                _, h = boot_ci([res[a.ref][i]["seeds"] for i in sub], [res[k][i]["seeds"] for i in sub], rl, grp_of(sub))
+                his.append(h)
+                if (h < 0) != (full_hi < 0):
+                    flips.append(drop)
+            L.append(f"| {k} | {min(ds):+.3f} .. {max(ds):+.3f} | {min(his):+.3f} .. {max(his):+.3f} | "
+                     f"{', '.join(f'`{x}`' for x in flips) or 'none'} |")
     rng2 = np.random.default_rng(1)
     rng_ok = in_train_range(man)
     L += ["", "## Secondary: test clips inside vs outside the training parameter range", "",
