@@ -11,10 +11,14 @@ Steps (each skipped if its output exists, so the driver can be restarted):
      three scorers' values.
   3. subsets at each keep-fraction (round(f * train clips)):
        curated    lowest ensemble selection score first
-       kinematic  lowest kinematic score first (select_subsets.kinematic_score)
+       kinematic  the cheap filter: clips that pass the kinematic check first, in the same fixed random order as the
+                  oracle, then failing ones by kinematic score (amended 11-15: ranking every clip by the kinematic score
+                  rated held leans easier than clean gaits)
        oracle     the physics filter: clips the hold test can hold (or that have no held pose) first, in a fixed random
                   order (seed 0), then infeasible ones by increasing lean size
        random     a seeded uniform draw per training seed
+       checked    every clip that passes the kinematic check, at its natural size (how the check is used in
+                  practice; amended 11-15); trained and evaluated like the main fraction
      Every subset keeps at least one clip of each category val / test hold, by swapping its own best-ranked clip of a
      missing category in for its worst-ranked clip (the same rule for every selector, so sizes stay exact).
   4. finals: selector x fraction x seed (200M), plus full; test evaluation (10 rollouts): nominal for every run, push
@@ -157,10 +161,11 @@ def main():
     # 3. subsets
     byid = {c["id"]: c for c in train}
     lean = lambda i: abs(byid[i]["params"].get("dx_m", 0.0))  # noqa: E731
-    rng0 = np.random.default_rng(0)
-    feas = [i for i in rng0.permutation(sorted(tid)) if not infeasible[i]]
+    rng0_order = list(np.random.default_rng(0).permutation(sorted(tid)))
+    feas = [i for i in rng0_order if not infeasible[i]]
     ranked = {"curated": sorted(tid, key=lambda i: (ens[i], i)),
-              "kinematic": sorted(tid, key=lambda i: (kinematic_score(byid[i]), i)),
+              "kinematic": [i for i in rng0_order if byid[i]["check"]["pass"]]
+                           + sorted((i for i in tid if not byid[i]["check"]["pass"]), key=lambda i: (kinematic_score(byid[i]), i)),
               "oracle": feas + sorted((i for i in tid if infeasible[i]), key=lambda i: (lean(i), i))}
     subsets = {}
     for f in a.fractions:
@@ -173,10 +178,20 @@ def main():
                 path = os.path.join(SUB, name + ".json")
                 json.dump(ids, open(path, "w"), indent=1)
                 subsets[(s_, f, seed)] = path
-                rs.log(f"subset {name}: {len(ids)} clips, leans {sum(cat[i] == 'lean' for i in ids)}, "
+                rs.log(f"subset {name}: {len(ids)} clips, clean {sum(cat[i] != 'lean' for i in ids)}, "
+                       f"leans {sum(cat[i] == 'lean' for i in ids)}, "
                        f"measured infeasible {sum(infeasible[i] for i in ids)}/{sum(infeasible.values())}")
 
+    checked = sorted(i for i in tid if byid[i]["check"]["pass"])
+    cpath = os.path.join(SUB, "checked.json")
+    json.dump(checked, open(cpath, "w"), indent=1)
+    rs.log(f"subset checked: {len(checked)} clips, clean {sum(cat[i] != 'lean' for i in checked)}, "
+           f"leans {sum(cat[i] == 'lean' for i in checked)}, measured infeasible {sum(infeasible[i] for i in checked)}")
+
     # 4. finals
+    for seed in a.seeds:
+        finals[("checked", None, seed)] = S.submit(f"{T}_checked_s{seed}", a.final_steps, prio=1, seed=seed, clips=cpath,
+                                                   on_done=lambda n, g: evals(n, g, a.main))
     for f in a.fractions:
         for s_ in a.selectors:
             for seed in a.seeds:

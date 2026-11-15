@@ -75,30 +75,32 @@ def main():
     L += ["", f"Selection score: **{sv['selection_score']}** (highest AUC; within {sv['tie']} the original score wins).", ""]
 
     # 2. composition
-    L += ["## Subsets: leans and measured-infeasible clips kept", "", "| selector | " +
+    L += ["## Subsets: clean clips, leans and measured-infeasible clips kept", "", "| selector | " +
           " | ".join(f"{f}%" for f in a.fractions) + " |", "|---|" + "---|" * len(a.fractions)]
     for s_ in a.selectors:
         row = []
         for f in a.fractions:
             name = f"{s_}_f{f}" + ("_s0" if s_ == "random" else "")
             ids = json.load(open(os.path.join(SUB, name + ".json")))
-            row.append(f"{len(ids)} clips, {sum(cat[i] == 'lean' for i in ids)} leans, "
+            row.append(f"{len(ids)} clips: {sum(cat[i] != 'lean' for i in ids)} clean, {sum(cat[i] == 'lean' for i in ids)} leans, "
                        f"{sum(infeasible[i] for i in ids)} infeasible")
         L.append(f"| {s_}{' (seed 0)' if s_ == 'random' else ''} | " + " | ".join(row) + " |")
     L.append("")
 
     # 3. the curve
     def files(cond, f, test="nominal"):
-        stem = "full" if cond == "full" else f"{cond}_f{f}"
+        stem = cond if cond in ("full", "checked") else f"{cond}_f{f}"
         return ",".join(os.path.join(TEST, f"{stem}_s{s}_{test}.json") for s in a.seeds)
 
     res = {(s_, f): cc.load(files(s_, f)) for s_ in a.selectors for f in a.fractions}
     full = cc.load(files("full", None))
+    chk = cc.load(files("checked", None))
     ids = sorted(full)
     mean = lambda r: np.mean([r[i]["score"] for i in ids])  # noqa: E731
     seedm = lambda r: [np.mean([r[i]["seeds"][k] for i in ids]) for k in range(len(a.seeds))]  # noqa: E731
     L += ["## The curve: mean test e (nominal), mean over seeds [seed range]", "",
-          f"full (all {len(infeasible)} clips): {mean(full):.3f} [{min(seedm(full)):.3f}, {max(seedm(full)):.3f}]", "",
+          f"full (all {len(infeasible)} clips): {mean(full):.3f} [{min(seedm(full)):.3f}, {max(seedm(full)):.3f}]; "
+          f"checked (every kinematic-check pass, natural size): {mean(chk):.3f} [{min(seedm(chk)):.3f}, {max(seedm(chk)):.3f}]", "",
           "| selector | " + " | ".join(f"{f}%" for f in a.fractions) + " |", "|---|" + "---|" * len(a.fractions)]
     for s_ in a.selectors:
         L.append(f"| {s_} | " + " | ".join(f"{mean(res[(s_, f)]):.3f} [{min(seedm(res[(s_, f)])):.3f}, "
@@ -121,7 +123,8 @@ def main():
     for test in TESTS:
         for m in METRICS if test == "nominal" else ("score",):
             conds = [f"curated={files('curated', a.main, test)}", f"full={files('full', None, test)}",
-                     *[f"{s_}={files(s_, a.main, test)}" for s_ in a.selectors if s_ != "curated"]]
+                     *[f"{s_}={files(s_, a.main, test)}" for s_ in a.selectors if s_ != "curated"],
+                     f"checked={files('checked', None, test)}"]
             out = os.path.join(OUT, f"comparison_f{a.main}_{test}_{m}.md")
             subprocess.run([py, os.path.join(os.path.dirname(os.path.abspath(__file__)), "compare_conditions.py"),
                             "--manifest", manp, "--cond", *conds, "--metric", m, "--group", "source",
@@ -138,8 +141,8 @@ def main():
     # 5. training cost
     L += [f"## Training cost ({a.main}% keep-fraction and full)", ""]
     rows, finals = [], {}
-    for cond in ["full", *a.selectors]:
-        stem = "full" if cond == "full" else f"{cond}_f{a.main}"
+    for cond in ["full", *a.selectors, "checked"]:
+        stem = cond if cond in ("full", "checked") else f"{cond}_f{a.main}"
         hrs, sph, curve = [], [], {}
         for s in a.seeds:
             ct = ckpt_times(f"{T}_{stem}_s{s}")
@@ -156,8 +159,9 @@ def main():
         finals[cond] = float(np.mean([curve[s][-1][1] for s in curve]))
         rows.append((cond, hrs, sph, curve))
     thr = THRESH * min(finals.values())
-    L += [f"Threshold: validation e ≤ {thr:.3f} ({THRESH} × the best final validation e).", "",
-          "| condition | wall-clock h | M steps / h | val e at 25 / 50 / 75 / 100% | M steps to threshold | h to threshold |",
+    L += [f"Threshold: validation e ≤ {thr:.3f} ({THRESH} × the best final validation e). Headline cost: M steps to "
+          "threshold. Wall-clock is secondary: evaluations share the GPU with training and launches wait for them.", "",
+          "| condition | M steps to threshold (per seed) | val e at 25 / 50 / 75 / 100% | h to threshold | wall-clock h | M steps / h |",
           "|---|---|---|---|---|---|"]
     for cond, hrs, sph, curve in rows:
         pts = np.mean([[e for _, e in curve[s]] for s in curve], axis=0) if curve else []
@@ -166,9 +170,9 @@ def main():
             hit = next((st for st, e in c if e <= thr), None)
             reach.append(hit / 1e6 if hit is not None else float("nan"))
             reach_h.append(hit / 1e6 / sph[a.seeds.index(s)] if hit is not None else float("nan"))
-        L.append(f"| {cond} | {np.mean(hrs):.2f} | {np.nanmean(sph):.0f} | {' / '.join(f'{x:.3f}' for x in pts)} | "
-                 f"{', '.join('—' if np.isnan(x) else f'{x:.0f}' for x in reach)} | "
-                 f"{', '.join('—' if np.isnan(x) else f'{x:.2f}' for x in reach_h)} |")
+        L.append(f"| {cond} | {', '.join('—' if np.isnan(x) else f'{x:.0f}' for x in reach)} | "
+                 f"{' / '.join(f'{x:.3f}' for x in pts)} | "
+                 f"{', '.join('—' if np.isnan(x) else f'{x:.2f}' for x in reach_h)} | {np.mean(hrs):.2f} | {np.nanmean(sph):.0f} |")
     # selection overhead: what each selector costs before any final policy trains
     sc_h = []
     for x in sorted(os.listdir(RUNS)):

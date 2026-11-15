@@ -58,7 +58,8 @@ Corrupted, ambitious and robot-only-infeasible clips did not.
 - **Keep-fractions:** 40, 55, 70 and 85% of the 82 train clips (33, 45, 57, 70 clips). **Main point: 55%.**
 - **Selectors:**
   - curated: lowest ensemble score first.
-  - kinematic: lowest kinematic score first (joint speed / servo speed, hip-roll demand, joint-limit closeness).
+  - kinematic, the cheap filter: clips that pass the kinematic check first, in the oracle's fixed random order, then
+    failing ones by kinematic score.
   - oracle, also a practical physics filter (as in KungfuBot's centre-of-mass / centre-of-pressure filter): clips the
     hold test does not fail first, in a fixed random order, then failing ones by increasing lean size.
   - random: one seeded draw per training seed.
@@ -155,3 +156,11 @@ Phase 3 result exists.
 - 2026-11-15, before any v7 result: training cost also reports each selector's own overhead. For curated, that is the
   three scoring policies' GPU-hours plus scoring the train clips; the kinematic check and hold test take seconds of
   CPU. Curation's total compute is compared with the cheap filters' on that basis.
+- 2026-11-15, before any v7 subset or result: (1) the kinematic selector is a pass / fail filter mirroring the oracle
+  (check-passing clips first in the same fixed random order). The drafted ranking by kinematic score rated slow held
+  leans easier than clean gaits: in the smoke test it kept 26 leans and dropped about half the clean gaits, which would
+  have made it a straw man. (2) The headline training cost is M steps to the validation threshold. Wall-clock stays
+  secondary because evaluations share the GPU with training. (3) Subset tables also list the clean clips kept.
+- 2026-11-15, same amendment: added `checked`, every clip passing the kinematic check at its natural size (73 clips),
+  3 seeds, evaluated like the main fraction and compared with curated at 55% (no pass bar). This is how the check is
+  used in practice; a pass / fail filter forced to a fixed fraction only pads with random clips.
