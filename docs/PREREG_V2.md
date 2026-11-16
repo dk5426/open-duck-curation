@@ -76,7 +76,8 @@ Corrupted, ambitious and robot-only-infeasible clips did not.
 
 ## 4. Phase 2, other algorithms (55% only)
 
-- **Conditions:** full, curated, kinematic, random and oracle at 55%, using the Phase 1 subsets (selection held fixed;
+- **Conditions:** full, curated, kinematic, random and oracle at the Phase 2/3 keep-fraction f* (see Amendments,
+  2026-11-16; 55% unless the rule picks another), using the Phase 1 subsets (selection held fixed;
   only the learner changes), 3 seeds each.
 - **Budget:** equal wall-clock, the mean wall-clock of the Phase 1 PPO 200M runs.
 
@@ -90,7 +91,7 @@ Corrupted, ambitious and robot-only-infeasible clips did not.
 
 ## 5. Phase 3, other ways to handle bad clips (PPO, 3 seeds each)
 
-Each method is compared against full, curated at 55% and oracle at 55%.
+Each method is compared against full, curated at f* and oracle at f* (f* as in Phase 2).
 
 | Method | Definition |
 |---|---|
@@ -184,3 +185,11 @@ Phase 3 result exists.
   s0 scorer is a single clean run. The copy left GPU 1's lock behind, which idled GPU 1 until 11-16 13:00.
   `tools/launch_train.sh` now refuses to start a run that is already live in its folder and reclaims a lock whose
   process is gone.
+- 2026-11-16, before any Phase 1 curve result at 40 / 70 / 85% and before any Phase 2 / 3 run (owner's request):
+  Phases 2 and 3 run at **f\***, the keep-fraction where curated does best, chosen on **validation** clips only.
+  After Phase 1, each curated final run (4 fractions × 3 seeds) is evaluated on the 18 validation clips at its final
+  checkpoint (10 rollouts, original `score`). f\* = the fraction with the lowest mean over the 3 seeds; if 55% is within
+  0.01 of the best, 55% is kept. The test set plays no part in the choice. All selectors in Phases 2 / 3 use their
+  Phase 1 subsets at f\*. The Phase 1 pass bar stays at 55%. Because f\* is picked to suit curated, Phase 2 / 3
+  comparisons are read as "curation at its best size", and the report says so. Seen before this amendment: test results
+  of 6 finished runs at 55% only (checked, curated, curated by the original score).
