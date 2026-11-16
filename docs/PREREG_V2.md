@@ -178,3 +178,9 @@ Phase 3 result exists.
   it polled more than 2 minutes after the launch. Fixed in `run_study.Scheduler`: a refusal is now recognised by
   launch.txt not being written. No run or result was affected.
 
+- 2026-11-16, no result affected: a driver restart at 14:17 on 11-15 re-queued `cv7_score_s0` while it was still
+  running, and the copy started on GPU 2 at 16:26, 20 s before the original finished. It trained a second, identical
+  seed-0 run into the same folder. Scoring used the original's final checkpoint (`2026_11_15_162703_300482560`), so the
+  s0 scorer is a single clean run. The copy left GPU 1's lock behind, which idled GPU 1 until 11-16 13:00.
+  `tools/launch_train.sh` now refuses to start a run that is already live in its folder and reclaims a lock whose
+  process is gone.

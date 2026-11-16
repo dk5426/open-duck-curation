@@ -2,7 +2,8 @@
 # Launch one Open Duck Playground training run on one GPU under the shared lock protocol.
 #   launch_train.sh <gpu> <run_name> <num_timesteps> [extra runner.py args...]
 # Env: ALLOW_BUSY_GPU=1 skips the "no process on the GPU" check (owner allowed GPU 0, which hosts another user's job).
-# Refuses if $LOCKS/walker_waiting exists or the GPU lock is held. Removes only its own lock.
+# Refuses if $LOCKS/walker_waiting exists, the GPU lock is held, or the run is already live in its folder (rc 4).
+# A lock whose holder process is gone is reclaimed. Removes only its own lock.
 set -u
 GPU=$1; RUN=$2; STEPS=$3; shift 3
 ROOT=${OPENDUCK_ROOT:-$HOME/OpenDuck}
@@ -15,7 +16,18 @@ if [ -e "$LOCKS/walker_waiting" ]; then echo "walker_waiting present; not launch
 BUSY=$(nvidia-smi -i "$GPU" --query-compute-apps=pid --format=csv,noheader | wc -l)
 nvidia-smi -i "$GPU" --query-compute-apps=pid,used_memory --format=csv,noheader
 if [ "$BUSY" != "0" ] && [ "${ALLOW_BUSY_GPU:-0}" != "1" ]; then echo "GPU $GPU has $BUSY process(es); not launching"; exit 3; fi
-mkdir "$LOCK" 2>/dev/null || { echo "lock $LOCK held: $(cat $LOCK/info 2>/dev/null)"; exit 4; }
+# alive <tag>: the tag's pid is running and its command line names the tag's run (guards against pid reuse)
+alive() { set -- $1; [ -n "${4:-}" ] && ps -p "$4" -o args= 2>/dev/null | grep -q -- "$2"; }
+if [ -f "$OUT/.lock_tag" ] && alive "$(cat $OUT/.lock_tag)"; then
+  echo "$RUN is already running ($(cat $OUT/.lock_tag)); not launching a duplicate"; exit 4
+fi
+if ! mkdir "$LOCK" 2>/dev/null; then
+  INFO=$(cat $LOCK/info 2>/dev/null)
+  if [ -n "$INFO" ] && ! alive "$INFO"; then
+    echo "reclaiming stale lock $LOCK ($INFO: process gone)"; rm -rf "$LOCK"
+  fi
+  mkdir "$LOCK" 2>/dev/null || { echo "lock $LOCK held: $(cat $LOCK/info 2>/dev/null)"; exit 4; }
+fi
 
 TAG="openduck $RUN pid $$"
 echo "$TAG" > "$LOCK/info"
