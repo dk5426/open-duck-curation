@@ -188,10 +188,22 @@ def main():
     rs.log(f"subset checked: {len(checked)} clips, clean {sum(cat[i] != 'lean' for i in checked)}, "
            f"leans {sum(cat[i] == 'lean' for i in checked)}, measured infeasible {sum(infeasible[i] for i in checked)}")
 
+    # label-free curation (amended 11-15): when validation picked another score, the main fraction is also curated by
+    # the original score, which needs no feasibility labels, i.e. what a real user would run
+    extra = {"checked": cpath}
+    if sel != "score":
+        ens0 = {i: float(np.mean([per[k][i]["score"] for k in per])) for i in tid}
+        ids = with_coverage(sorted(tid, key=lambda i: (ens0[i], i)), int(round(a.main / 100 * len(tid))), cat, judged)
+        extra[f"curatedscore_f{a.main}"] = os.path.join(SUB, f"curatedscore_f{a.main}.json")
+        json.dump(ids, open(extra[f"curatedscore_f{a.main}"], "w"), indent=1)
+        rs.log(f"subset curatedscore_f{a.main}: {len(ids)} clips, clean {sum(cat[i] != 'lean' for i in ids)}, "
+               f"leans {sum(cat[i] == 'lean' for i in ids)}, measured infeasible {sum(infeasible[i] for i in ids)}")
+
     # 4. finals
-    for seed in a.seeds:
-        finals[("checked", None, seed)] = S.submit(f"{T}_checked_s{seed}", a.final_steps, prio=1, seed=seed, clips=cpath,
-                                                   on_done=lambda n, g: evals(n, g, a.main))
+    for stem, path in extra.items():
+        for seed in a.seeds:
+            finals[(stem, None, seed)] = S.submit(f"{T}_{stem}_s{seed}", a.final_steps, prio=1, seed=seed, clips=path,
+                                                  on_done=lambda n, g: evals(n, g, a.main))
     for f in a.fractions:
         for s_ in a.selectors:
             for seed in a.seeds:

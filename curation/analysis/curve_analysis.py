@@ -108,7 +108,7 @@ def main():
 
     # 3. the curve
     def files(cond, f, test="nominal"):
-        stem = cond if cond in ("full", "checked") else f"{cond}_f{f}"
+        stem = cond if cond in ("full", "checked") or cond.startswith("curatedscore") else f"{cond}_f{f}"
         return ",".join(os.path.join(TEST, f"{stem}_s{s}_{test}.json") for s in a.seeds)
 
     res = {(s_, f): cc.load(files(s_, f)) for s_ in a.selectors for f in a.fractions}
@@ -138,12 +138,18 @@ def main():
     L.append("")
 
     # 4. primary and secondary at the main fraction
+    LF = f"curatedscore_f{a.main}"  # curated by the original score (label-free), run when validation picked another
+
+    def label_free(test):
+        return [f"{LF}={files(LF, None, test)}"] if os.path.exists(os.path.join(TEST, f"{LF}_s{a.seeds[0]}_{test}.json")) \
+            else []
+
     py = sys.executable
     for test in TESTS:
         for m in METRICS if test == "nominal" else ("score",):
             conds = [f"curated={files('curated', a.main, test)}", f"full={files('full', None, test)}",
                      *[f"{s_}={files(s_, a.main, test)}" for s_ in a.selectors if s_ != "curated"],
-                     f"checked={files('checked', None, test)}"]
+                     f"checked={files('checked', None, test)}", *label_free(test)]
             out = os.path.join(OUT, f"comparison_f{a.main}_{test}_{m}.md")
             subprocess.run([py, os.path.join(os.path.dirname(os.path.abspath(__file__)), "compare_conditions.py"),
                             "--manifest", manp, "--cond", *conds, "--metric", m, "--group", "source",
@@ -160,8 +166,8 @@ def main():
     # 5. training cost
     L += [f"## Training cost ({a.main}% keep-fraction and full)", ""]
     rows, finals = [], {}
-    for cond in ["full", *a.selectors, "checked"]:
-        stem = cond if cond in ("full", "checked") else f"{cond}_f{a.main}"
+    for cond in ["full", *a.selectors, "checked", *([LF] if label_free("nominal") else [])]:
+        stem = cond if cond in ("full", "checked", LF) else f"{cond}_f{a.main}"
         hrs, sph, curve = [], [], {}
         for s in a.seeds:
             ct = ckpt_times(f"{T}_{stem}_s{s}")

@@ -63,6 +63,14 @@ def finished(name):
     return os.path.exists(f) and "exit rc=0" in open(f).read()
 
 
+def started_since(name, t0):
+    """True if launch_train.sh got as far as starting training for this launch. A refusal (GPU busy or locked) exits
+    before it writes launch.txt; timing the exit is not enough, since the driver may block on evaluations for minutes
+    before it polls."""
+    f = os.path.join(RUNS, name, "launch.txt")
+    return os.path.exists(f) and os.path.getmtime(f) >= t0 - 1
+
+
 def final_ckpt(name):
     d = os.path.join(RUNS, name)
     cks = [x for x in os.listdir(d) if x[:4].isdigit() and not x.endswith(".onnx")]
@@ -109,7 +117,7 @@ class Scheduler:
             if rc is None:
                 continue
             del self.running[name]
-            if rc in (2, 3, 4) and time.time() - t0 < 120:  # launch refused: GPU busy or locked; retry later
+            if rc in (2, 3, 4) and not started_since(name, t0):  # launch refused: GPU busy or locked; retry later
                 self.cool[gpu] = time.time() + 60
                 self.pending.append(job)
                 log(f"launch of {name} on GPU {gpu} refused (rc {rc}); retrying")

@@ -170,4 +170,11 @@ Phase 3 result exists.
   (`lean__33`, +5.1 cm, labelled feasible, fails 44% of perturbed tests). Every other label agrees in all 27. The analysis
   reports the selection AUCs without borderline clips and how many each subset keeps. The dataset and its labels are
   unchanged. Remaining caveat: the hold test is static, so it does not test the move into the pose or active balance.
+- 2026-11-15 21:30, after the scoring policies and before any final result: selection validation picked `score_v3`
+  (AUC 0.862 vs the original score's 0.835, beyond the 0.02 margin). Because that choice used the feasibility labels,
+  the main fraction is also trained curated by the original score (`curatedscore_f55`, 3 seeds; no labels needed, which
+  is what a real user would run) and reported beside curated. The pass bar stays on curated as pre-registered.
+- 2026-11-15 21:30: the driver stopped at 21:12. Its scheduler misread a "GPU busy" launch refusal as a failed run when
+  it polled more than 2 minutes after the launch. Fixed in `run_study.Scheduler`: a refusal is now recognised by
+  launch.txt not being written. No run or result was affected.
 
