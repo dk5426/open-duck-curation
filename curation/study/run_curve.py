@@ -24,6 +24,10 @@ Steps (each skipped if its output exists, so the driver can be restarted):
   4. finals: selector x fraction x seed (200M), plus full; test evaluation (10 rollouts): nominal for every run, push
      0.3 / 0.6 and friction x 0.6 for the main fraction and full; validation scores (5 rollouts) at the checkpoints
      nearest 25 / 50 / 75 / 100% of training for the main fraction and full (training cost)
+  4b. --fstar (amended 11-16): every curated final on validation (final checkpoint, 10 rollouts, original score);
+     f* = the fraction with the lowest mean over seeds, the main fraction if within 0.01 -> fstar.json
+  4c. --strat (exploratory, amended 11-17 after interim results): curatedstrat at the main fraction and f*, the
+     curated ranking with a proportional floor (each val / test category first keeps its best ceil(f x n) train clips)
   5. analysis: curation/analysis/curve_analysis.py -> SUMMARY.md, DONE
 """
 
@@ -80,6 +84,17 @@ def with_coverage(ranked, n, cat, judged):
     return sorted(keep)
 
 
+def stratified(ranked, n, cat, judged, frac):
+    """Curation with a proportional floor (exploratory, amended 11-17): each judged category first keeps its best-ranked
+    ceil(frac x its train clips), then the rest of the n slots are filled in global rank order."""
+    keep = []
+    for c in sorted(judged):
+        mem = [i for i in ranked if cat[i] == c]
+        keep += mem[:int(np.ceil(frac * len(mem)))]
+    keep += [i for i in ranked if i not in keep][:max(0, n - len(keep))]
+    return sorted(keep)
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--gpus", type=int, nargs="+", required=True)
@@ -93,6 +108,8 @@ def main():
     p.add_argument("--score-steps", type=int, default=300_000_000)
     p.add_argument("--final-steps", type=int, default=200_000_000)
     p.add_argument("--rollouts", type=int, default=10)
+    p.add_argument("--fstar", action="store_true", help="after the finals, pick f* on validation (amendment 11-16)")
+    p.add_argument("--strat", action="store_true", help="exploratory stratified curation at the main fraction and f*")
     a = p.parse_args()
     a.lib = os.path.abspath(a.lib)
     rs.a = argparse.Namespace(lib=a.lib)
@@ -214,6 +231,39 @@ def main():
     while futures:
         futures.pop().result()
 
+    # 4b. f* (amendment 11-16): curated's best keep-fraction on validation, final checkpoint, 10 rollouts, original score
+    fstar = None
+    if a.fstar:
+        vm = {}
+        for f in a.fractions:
+            per_seed = []
+            for seed in a.seeds:
+                out = os.path.join(VAL, f"fstar_curated_f{f}_s{seed}.json")
+                rs.run_eval(rs.final_ckpt(f"{T}_curated_f{f}_s{seed}"), "val", a.rollouts, out, a.gpus[0])
+                per_seed.append(float(np.mean([v["score"] for v in json.load(open(out))["clips"].values()])))
+            vm[f] = per_seed
+        best = min(a.fractions, key=lambda f: np.mean(vm[f]))
+        fstar = a.main if np.mean(vm[a.main]) <= np.mean(vm[best]) + 0.01 else best
+        json.dump({"val_e_per_seed": vm, "best": best, "tie": 0.01, "fstar": fstar},
+                  open(os.path.join(OUT, "fstar.json"), "w"), indent=1)
+        rs.log("f*: " + ", ".join(f"{f}% val e {np.mean(v):.3f}" for f, v in vm.items()) + f" -> f* = {fstar}%")
+
+    # 4c. exploratory (amended 11-17, after interim results): curation with a proportional per-category floor
+    if a.strat:
+        strat = {}
+        for f in sorted({a.main, *([fstar] if fstar else [])}):
+            ids = stratified(ranked["curated"], int(round(f / 100 * len(tid))), cat, judged, f / 100)
+            path = os.path.join(SUB, f"curatedstrat_f{f}.json")
+            json.dump(ids, open(path, "w"), indent=1)
+            rs.log(f"subset curatedstrat_f{f}: {len(ids)} clips, clean {sum(cat[i] != 'lean' for i in ids)}, "
+                   f"leans {sum(cat[i] == 'lean' for i in ids)}, measured infeasible {sum(infeasible[i] for i in ids)}")
+            for seed in a.seeds:
+                strat[(f, seed)] = S.submit(f"{T}_curatedstrat_f{f}_s{seed}", a.final_steps, prio=1, seed=seed,
+                                            clips=path, on_done=lambda n, g: evals(n, g, a.main))
+        S.wait_for(list(strat.values()))
+        while futures:
+            futures.pop().result()
+
     # 5. analysis
     r = subprocess.run([rs.PY, os.path.join(rs.C, "curation/analysis/curve_analysis.py"), "--tag", T, "--lib", a.lib,
                         "--fractions", *map(str, a.fractions), "--main", str(a.main), "--selectors", *a.selectors,
@@ -221,6 +271,11 @@ def main():
     if r.returncode != 0:
         rs.log(f"ANALYSIS FAILED: {r.stderr[-800:]}")
         raise RuntimeError("analysis")
+    r = subprocess.run([rs.PY, os.path.join(rs.C, "curation/analysis/mechanism.py"), "--tag", T, "--lib", a.lib,
+                        "--fractions", *map(str, a.fractions), "--seeds", *map(str, a.seeds)],
+                       cwd=rs.PG, capture_output=True, text=True)
+    if r.returncode != 0:
+        rs.log(f"MECHANISM ANALYSIS FAILED (non-fatal): {r.stderr[-800:]}")
     open(os.path.join(OUT, "DONE"), "w").write(time.strftime("%Y-%m-%d %H:%M") + "\n")
     rs.log("DONE")
 

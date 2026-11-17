@@ -193,3 +193,12 @@ Phase 3 result exists.
   Phase 1 subsets at f\*. The Phase 1 pass bar stays at 55%. Because f\* is picked to suit curated, Phase 2 / 3
   comparisons are read as "curation at its best size", and the report says so. Seen before this amendment: test results
   of 6 finished runs at 55% only (checked, curated, curated by the original score).
+- 2026-11-17, after interim Phase 1 results (40 / 55 / 70%), all **exploratory**:
+  (1) mechanism analysis `curation/analysis/mechanism.py` -> `results/cv7/MECHANISM.md` (score overlap, what curated
+  drops, the dropped share against curated − oracle per category);
+  (2) stratified curation `curatedstrat` at the main fraction and f* (3 seeds each): the curated ranking with a
+  proportional floor, so each val / test category first keeps its best ceil(f × n) train clips (55%: 31 clean, 6
+  infeasible, against curated's 27 and 10). It answers "is the weak coverage rule why curation loses?". It is run by
+  the cv7 driver's second pass (`--fstar --strat`) after Phase 1;
+  (3) SUMMARY.md labels one PRIMARY result (curated vs full / random at 55%, nominal, original score); everything else
+  is SECONDARY or EXPLORATORY; limitations in `docs/LIMITATIONS.md`; robot demo plan in `docs/ROBOT_DEMO_PLAN.md`.

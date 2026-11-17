@@ -34,14 +34,16 @@ THRESH = 1.1
 
 
 def ckpt_times(name):
-    """[(step, datetime)] of a run's checkpoints (folder names YYYY_MM_DD_HHMMSS_step)."""
+    """[(step, datetime)] of a run's checkpoints (folder names YYYY_MM_DD_HHMMSS_step), the earliest per step: a run
+    folder that a duplicate launch also wrote into (cv7_score_s0, PREREG v2 amendment 11-16) keeps the original's times."""
     d = os.path.join(RUNS, name)
-    out = []
+    out = {}
     for x in os.listdir(d):
         if x[:4].isdigit() and not x.endswith(".onnx"):
             *t, s = x.split("_")
-            out.append((int(s), datetime.datetime.strptime("_".join(t), "%Y_%m_%d_%H%M%S")))
-    return sorted(out)
+            t = datetime.datetime.strptime("_".join(t), "%Y_%m_%d_%H%M%S")
+            out[int(s)] = min(t, out.get(int(s), t))
+    return sorted(out.items())
 
 
 def main():
@@ -63,7 +65,10 @@ def main():
     rng = np.random.default_rng(0)
     L = [f"# Study {T}: summary (PREREG v2)", "", f"Library `{os.path.basename(a.lib)}`: {len(infeasible)} train clips "
          f"({sum(infeasible.values())} measured infeasible), "
-         f"{sum(c['split'] == 'test' for c in man['clips'])} test clips. Seeds {a.seeds}. Lower e is better.", ""]
+         f"{sum(c['split'] == 'test' for c in man['clips'])} test clips. Seeds {a.seeds}. Lower e is better.", "",
+         f"**One primary result:** curated vs full and random at {a.main}%, nominal test, original score (PREREG v2 §7). "
+         "Everything else is SECONDARY (pre-registered, no pass bar, no multiple-comparison correction) or EXPLORATORY "
+         "(added after results were seen), and is labelled as such.", ""]
 
     # 1. selection validation
     sv = json.load(open(os.path.join(OUT, "selection_validation.json")))
@@ -108,7 +113,7 @@ def main():
 
     # 3. the curve
     def files(cond, f, test="nominal"):
-        stem = cond if cond in ("full", "checked") or cond.startswith("curatedscore") else f"{cond}_f{f}"
+        stem = cond if cond in ("full", "checked") or cond.startswith(("curatedscore", "curatedstrat")) else f"{cond}_f{f}"
         return ",".join(os.path.join(TEST, f"{stem}_s{s}_{test}.json") for s in a.seeds)
 
     res = {(s_, f): cc.load(files(s_, f)) for s_ in a.selectors for f in a.fractions}
@@ -161,7 +166,37 @@ def main():
             keep = [ln for ln in body[:end] if (ln.startswith("| ") and not ln.startswith(("| `", "| clip ")))
                     or ln.startswith(("- ", "## Leave"))]
             primary = (test, m) == ("nominal", "score")
-            L += [f"## {'PRIMARY: ' if primary else ''}{a.main}% keep-fraction, test {test}, {m}", "", *keep, ""]
+            L += [f"## {'PRIMARY' if primary else 'SECONDARY'}: {a.main}% keep-fraction, test {test}, {m}", "",
+                  *([] if primary else ["Secondary: reported without a pass bar and without correction for multiple "
+                                        "comparisons; read as supporting evidence only.", ""]), *keep, ""]
+
+    # 4b. f* and the exploratory stratified arm
+    fsp = os.path.join(OUT, "fstar.json")
+    if os.path.exists(fsp):
+        fs = json.load(open(fsp))
+        L += ["## f*: curated's best keep-fraction on validation (amendment 11-16)", "",
+              "| fraction | curated val e per seed | mean |", "|---|---|---|"]
+        for f, v in fs["val_e_per_seed"].items():
+            L.append(f"| {f}% | {', '.join(f'{x:.3f}' for x in v)} | {np.mean(v):.3f} |")
+        L += ["", f"f* = **{fs['fstar']}%** (lowest mean {fs['best']}%; the main fraction is kept within {fs['tie']}). "
+              "Phases 2 and 3 run at f*.", ""]
+    strat = sorted(int(x.split("_f")[1].split("_")[0]) for x in os.listdir(TEST)
+                   if x.startswith("curatedstrat_f") and x.endswith(f"_s{a.seeds[-1]}_nominal.json"))
+    for f in strat:
+        st = f"curatedstrat_f{f}"
+        ids_s = json.load(open(os.path.join(SUB, st + ".json")))
+        conds = [f"curatedstrat={files(st, None)}", f"curated={files('curated', f)}", f"full={files('full', None)}",
+                 f"oracle={files('oracle', f)}", f"kinematic={files('kinematic', f)}"]
+        out = os.path.join(OUT, f"comparison_strat_f{f}_nominal_score.md")
+        subprocess.run([py, os.path.join(os.path.dirname(os.path.abspath(__file__)), "compare_conditions.py"),
+                        "--manifest", manp, "--cond", *conds, "--ref", "curatedstrat", "--group", "source",
+                        "--title", f"Study {T}, stratified curation at {f}%", "--out", out], check=True, capture_output=True)
+        body = open(out).read().split("\n")
+        end = body.index("## Secondary: test clips inside vs outside the training parameter range")
+        keep = [ln for ln in body[:end] if ln.startswith("| ") and not ln.startswith(("| `", "| clip "))]
+        L += [f"## EXPLORATORY: stratified curation at {f}% (added 11-17 after interim results, not pre-registered)", "",
+              f"`{st}`: {len(ids_s)} clips, {sum(cat[i] != 'lean' for i in ids_s)} clean, "
+              f"{sum(infeasible[i] for i in ids_s)} measured infeasible. Negative = stratified better.", "", *keep, ""]
 
     # 5. training cost
     L += [f"## Training cost ({a.main}% keep-fraction and full)", ""]
