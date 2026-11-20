@@ -99,7 +99,8 @@ class Scheduler:
         self.cool = {g: 0.0 for g in gpus}
         self.n = 0
 
-    def submit(self, name, steps, prio, clips=None, seed=0, restore=None, on_done=None):
+    def submit(self, name, steps, prio, clips=None, seed=0, restore=None, on_done=None, args=(), env=None):
+        """args: extra trainer arguments; env: extra environment (Phase 2: TRAIN_ENTRY)."""
         if finished(name):
             log(f"skip {name} (finished)")
             self.done.add(name)
@@ -108,7 +109,7 @@ class Scheduler:
             return name
         self.n += 1
         self.pending.append(dict(name=name, steps=steps, prio=prio, clips=clips, seed=seed, restore=restore,
-                                 on_done=on_done, order=self.n))
+                                 on_done=on_done, order=self.n, args=list(args), env=env or {}))
         return name
 
     def tick(self):
@@ -142,12 +143,14 @@ class Scheduler:
                 if job["on_done"]:
                     job["on_done"](job["name"], g)
                 continue
-            env = dict(os.environ, CURATION_LIBRARY=a.lib, PPO_OVERRIDES_JSON=json.dumps({"seed": job["seed"]}))
+            env = dict(os.environ, CURATION_LIBRARY=a.lib, PPO_OVERRIDES_JSON=json.dumps({"seed": job["seed"]}),
+                       **job.get("env", {}))
             if job["clips"]:
                 env["CURATION_CLIPS"] = job["clips"]
             args = [LAUNCH, str(g), job["name"], str(job["steps"]), "--env", "tracking"]
             if job["restore"]:
                 args += ["--restore_checkpoint_path", job["restore"]]
+            args += job.get("args", [])
             out = open(os.path.join(OUT, "launch", job["name"] + ".out"), "w")
             p = subprocess.Popen(args, cwd=ROOT, env=env, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
             self.running[job["name"]] = (p, job, g, time.time())

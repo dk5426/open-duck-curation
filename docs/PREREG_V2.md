@@ -202,3 +202,26 @@ Phase 3 result exists.
   the cv7 driver's second pass (`--fstar --strat`) after Phase 1;
   (3) SUMMARY.md labels one PRIMARY result (curated vs full / random at 55%, nominal, original score); everything else
   is SECONDARY or EXPLORATORY; limitations in `docs/LIMITATIONS.md`; robot demo plan in `docs/ROBOT_DEMO_PLAN.md`.
+- 2026-11-19, after Phase 1 and before any Phase 2 run: Phase 2 implementation (`curation/study/train_alt.py`,
+  `fasttd3_duck.py`, `run_phase2.py`, `curation/analysis/phase2_analysis.py`). Every learner trains on the Phase 1
+  subset files, env, randomization and observation; every policy is tested by the Phase 1 evaluator (`eval_clips.py`,
+  nominal, 10 rollouts). PPO is not rerun: its Phase 1 runs are the reference row.
+  (1) **Budget:** equal wall-clock = 1.562 h, the mean start-to-exit time of the 63 Phase 1 PPO 200M runs. Each learner's
+  step count is fixed in advance from its measured throughput in a smoke run on an otherwise idle GPU
+  (`results/cv7/phase2_calibration.json`): SAC 23.8M, ARS 31.5M, DAgger 93.9M, FastTD3 54.3M env steps.
+  (2) **PPO without feed-forward:** Phase 1's runner unchanged with `ref_feedforward=False`, 200M steps.
+  (3) **SAC (brax):** the critic sees the actor observation (brax SAC has no asymmetric critic); actor and critic
+  512-256-128; MuJoCo Playground's SAC config with discount 0.97 and a 1M replay buffer (its 4M does not fit the 16 GB
+  GPUs).
+  (4) **ARS (brax):** linear policy on the normalized actor observation, 60 directions, top 20, step 0.015, noise 0.025.
+  (5) **DAgger (brax online DAgger):** the teacher is the Phase 1 PPO final policy of the same condition and seed, so a
+  student sees only its own condition's clips; the student is PPO's policy network, trained by L2 on the teacher's
+  mean action; the teacher acts only in the first iteration. Its teacher's 1.56 h is not charged to its budget.
+  (6) **FastTD3:** the authors' code (github.com/younggyoseo/FastTD3) and Playground defaults, in its own torch venv,
+  with our env behind its Playground bridge (actor on the actor observation, critic on the privileged one). Deviations
+  for the 16 GB GPUs: replay 2048 steps per env (1024 envs), 256 evaluation envs, `torch.compile` off (Triton cannot
+  compile its kernels on these GPUs), no rendering. The trained actor is exported to JAX for the evaluator; export
+  and torch actor agree to 5e-6.
+  (7) If a run's wall-clock lands far from the budget (another job on the GPU), the step count is not changed; the
+  report gives each run's wall-clock.
+  Conditions: full, curated, kinematic, oracle, random at the Phase 2 fraction, 3 seeds each.

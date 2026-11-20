@@ -65,7 +65,19 @@ def restore_params(ckpt):
     return ckptr.restore(path, restore_args=rargs)
 
 
+def learner_meta(ckpt):
+    """learner.json of a Phase 2 run (curation/study/train_alt.py), or None for a Phase 1 PPO run."""
+    f = os.path.join(os.path.dirname(os.path.abspath(ckpt)), "learner.json")
+    return json.load(open(f)) if os.path.exists(f) else None
+
+
 def load_policy(ckpt, env):
+    meta = learner_meta(ckpt)
+    if meta and meta["learner"] in ("sac", "ars", "fasttd3"):
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "study"))
+        from train_alt import load_alt_policy
+        return load_alt_policy(ckpt, env, meta)
+    # PPO, PPO without feed-forward and the DAgger student ([normalizer, policy]) share PPO's policy network
     ppo = locomotion_params.brax_ppo_config("BerkeleyHumanoidJoystickFlatTerrain")
     nets = ppo_networks.make_ppo_networks(env.observation_size, env.action_size,
                                           preprocess_observations_fn=__import__("brax.training.acme.running_statistics",
@@ -188,6 +200,9 @@ def main():
     p.add_argument("--friction", type=float, default=1.0, help="friction scale (P.7: 0.6)")
     p.add_argument("--out", required=True)
     a = p.parse_args()
+    meta = learner_meta(a.ckpt)
+    if meta and meta.get("tracking_overrides"):  # e.g. PPO without feed-forward: the env it was trained in
+        os.environ["TRACKING_OVERRIDES"] = json.dumps(meta["tracking_overrides"])
     _, man = tracking.load_library()
     ids = clip_ids(man, a.clips)
     res = evaluate(a.ckpt, ids, a.rollouts, a.seed, a.push, a.friction)

@@ -2,6 +2,7 @@
 # Launch one Open Duck Playground training run on one GPU under the shared lock protocol.
 #   launch_train.sh <gpu> <run_name> <num_timesteps> [extra runner.py args...]
 # Env: ALLOW_BUSY_GPU=1 skips the "no process on the GPU" check (owner allowed GPU 0, which hosts another user's job).
+#      TRAIN_ENTRY=<script> trains with another entry point taking the same arguments (Phase 2: train_alt.py).
 # Refuses if $LOCKS/walker_waiting exists, the GPU lock is held, or the run is already live in its folder (rc 4).
 # A lock whose holder process is gone is reclaimed. Removes only its own lock.
 set -u
@@ -41,7 +42,7 @@ export CUDA_VISIBLE_DEVICES=$GPU XLA_PYTHON_CLIENT_PREALLOCATE=false XLA_PYTHON_
 git rev-parse HEAD > "$OUT/git_head.txt"; git diff > "$OUT/git_diff.patch"
 cp playground/open_duck_mini_v2/data/polynomial_coefficients.pkl "$OUT/"
 echo "$(date -Is) start gpu=$GPU steps=$STEPS args=$*" >> "$OUT/launch.txt"
-uv run playground/open_duck_mini_v2/runner.py --task flat_terrain_backlash --num_timesteps "$STEPS" --output_dir "$OUT" "$@" \
+uv run "${TRAIN_ENTRY:-playground/open_duck_mini_v2/runner.py}" --task flat_terrain_backlash --num_timesteps "$STEPS" --output_dir "$OUT" "$@" \
   > "$OUT/train.log" 2>&1 &
 CHILD=$!
 TAG="openduck $RUN pid $CHILD"

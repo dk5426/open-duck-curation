@@ -1,0 +1,13 @@
+{
+ "budget_h": 1.562,
+ "budget_source": "mean start-to-exit wall-clock of the 63 Phase 1 PPO 200M runs (runs/cv7_*/launch.txt), range 1.51-1.63 h",
+ "rule": "steps = (budget_s - startup_s) x steady env steps/s (evaluation time included), from smoke runs on an otherwise idle RTX A4000 (GPU 2), curated_f85 clips, seed 0, 2026-11-19",
+ "measured": {
+  "sac": {"startup_s": 142, "steps_per_s": 4350, "smoke": "3.0M steps, 4 evals, three 1M chunks at 227-230 s each"},
+  "ars": {"startup_s": 173, "steps_per_s": 5779, "smoke": "2.0M steps, 3 evals"},
+  "dagger": {"startup_s": 168, "steps_per_s": 17210, "smoke": "4.1M steps (20 DAgger iterations of 2048 envs x 100 steps), 3 evals"},
+  "fasttd3": {"startup_s": 68, "steps_per_s": 10017, "eval_s_each": 26, "smoke": "600 vector steps x 1024 envs, 5 evals, torch.compile off; 9.78 vector steps/s"},
+  "ppo_noff": {"note": "Phase 1 PPO unchanged except the feed-forward: 200M, as Phase 1"}
+ },
+ "steps": {"ppo_noff": 200000000, "sac": 23800000, "ars": 31500000, "dagger": 93900000, "fasttd3": 54300000}
+}
