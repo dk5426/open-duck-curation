@@ -53,6 +53,7 @@ MAIN = 55
 SELECTORS = ("curated", "kinematic", "oracle", "random")
 CANDIDATES = ("score", "score_v2", "score_v3", "fall_rate")
 AUC_TIE = 0.02
+STATIONARY = ("crouch", "bow", "sway", "head", "lean")  # one motion group for the type-normalised score
 
 
 def auc(x, y):
@@ -113,7 +114,12 @@ def main():
     p.add_argument("--fstar", action="store_true", help="after the finals, pick f* on validation (amendment 11-16)")
     p.add_argument("--strat", action="store_true", help="exploratory stratified curation at the main fraction and f*")
     p.add_argument("--tn", action="store_true", help="exploratory type-normalised curation at the main fraction "
-                   "(ranking from score_candidates.py)")
+                   "(ranking from score_candidates.py, or computed here from the scorers' val evaluations)")
+    p.add_argument("--fixed-score", default=None, help="selection score fixed in advance (a library without feasibility "
+                   "labels: no AUC validation)")
+    p.add_argument("--no-extras", action="store_true", help="skip the checked and curatedscore conditions")
+    p.add_argument("--analysis", choices=("curve", "none"), default="curve", help="none: stop after training and test "
+                   "evaluation (a study with its own analysis)")
     a = p.parse_args()
     a.lib = os.path.abspath(a.lib)
     rs.a = argparse.Namespace(lib=a.lib)
@@ -168,12 +174,15 @@ def main():
         per[k] = sc
     y = [infeasible[i] for i in tid]
     val = {}
-    for m in CANDIDATES:
+    for m in (() if a.fixed_score else CANDIDATES):
         aucs = [auc([per[k][i][m] for i in tid], y) for k in per]
         rhos = [spearman([per[k][i][m] for i in tid], [per[j][i][m] for i in tid]) for k in per for j in per if k < j]
         val[m] = {"auc_per_scorer": aucs, "auc": float(np.mean(aucs)), "spearman_between_scorers": rhos}
-    best = max(v["auc"] for v in val.values())
-    sel = "score" if val["score"]["auc"] >= best - AUC_TIE else max(val, key=lambda m: val[m]["auc"])
+    if a.fixed_score:
+        sel = a.fixed_score
+    else:
+        best = max(v["auc"] for v in val.values())
+        sel = "score" if val["score"]["auc"] >= best - AUC_TIE else max(val, key=lambda m: val[m]["auc"])
     ens = {i: float(np.mean([per[k][i][sel] for k in per])) for i in tid}
     json.dump({"candidates": val, "tie": AUC_TIE, "selection_score": sel, "ensemble": ens},
               open(os.path.join(OUT, "selection_validation.json"), "w"), indent=1)
@@ -211,8 +220,8 @@ def main():
 
     # label-free curation (amended 11-15): when validation picked another score, the main fraction is also curated by
     # the original score, which needs no feasibility labels, i.e. what a real user would run
-    extra = {"checked": cpath}
-    if sel != "score":
+    extra = {} if a.no_extras else {"checked": cpath}
+    if sel != "score" and not a.no_extras:
         ens0 = {i: float(np.mean([per[k][i]["score"] for k in per])) for i in tid}
         ids = with_coverage(sorted(tid, key=lambda i: (ens0[i], i)), int(round(a.main / 100 * len(tid))), cat, judged)
         extra[f"curatedscore_f{a.main}"] = os.path.join(SUB, f"curatedscore_f{a.main}.json")
@@ -271,7 +280,22 @@ def main():
     # 4d. exploratory (11-19, after Phase 1): curation by the type-normalised score (score_candidates.py, candidate
     # "1. typenorm_val": score_v3 over the median of the clip's motion group's clean val clips), same coverage rule
     if a.tn:
-        tnr = json.load(open(os.path.join(OUT, "score_candidates", "candidates.json")))["1. typenorm_val"]
+        cpath_ = os.path.join(OUT, "score_candidates", "candidates.json")
+        if os.path.exists(cpath_):
+            tnr = json.load(open(cpath_))["1. typenorm_val"]
+        else:  # the same definition as score_candidates.py, from each scorer's final checkpoint on the val clips
+            vids = [c["id"] for c in man["clips"] if c["split"] == "val"]
+            grp = lambda i: "stationary" if cat[i] in STATIONARY else cat[i]  # noqa: E731
+            os.makedirs(os.path.join(OUT, "score_candidates"), exist_ok=True)
+            tn_per = []
+            for k, name in zip(a.score_seeds, scorers):
+                f = os.path.join(OUT, "score_candidates", f"scores_val_s{k}_final.json")
+                rs.run_eval(rs.final_ckpt(name), "val", a.rollouts, f, a.gpus[0])
+                vv = json.load(open(f))["clips"]
+                med = {g: float(np.median([vv[i]["score_v3"] for i in vids if grp(i) == g])) for g in {grp(i) for i in vids}}
+                tn_per.append({i: per[k][i]["score_v3"] / med[grp(i)] for i in tid})
+            tnr = {i: float(np.mean([t[i] for t in tn_per])) for i in tid}
+            json.dump(tnr, open(os.path.join(OUT, "score_candidates", "typenorm_val.json"), "w"), indent=1)
         ids = with_coverage(sorted(tid, key=lambda i: (tnr[i], i)), int(round(a.main / 100 * len(tid))), cat, judged)
         path = os.path.join(SUB, f"curatedtn_f{a.main}.json")
         json.dump(ids, open(path, "w"), indent=1)
@@ -282,6 +306,11 @@ def main():
         S.wait_for(tn)
         while futures:
             futures.pop().result()
+
+    if a.analysis == "none":
+        open(os.path.join(OUT, "DONE"), "w").write(time.strftime("%Y-%m-%d %H:%M") + "\n")
+        rs.log("DONE (training and test evaluation; analysis is separate)")
+        return
 
     # 5. analysis
     r = subprocess.run([rs.PY, os.path.join(rs.C, "curation/analysis/curve_analysis.py"), "--tag", T, "--lib", a.lib,

@@ -240,3 +240,10 @@ Phase 3 result exists.
   (`curation/clips/dynamic_check.py`) marks every v7 walking gait infeasible, so it is reported as a description only.
   Test set: the clean v7 test clips plus held-out gentle wild variants. Test-clip rule, fixed before any result: a
   test clip is dropped from the analysis if every condition falls in at least half of its rollouts.
+- 2026-11-19, wild-clip study design fixed before it runs (`data/clips_v8`, `curation/clips/make_v8.py`, tag cv8):
+  train = v7's 37 clean clips + 45 wild sweep clips (82); val = v7's 19 + 1 gentle held-out wild variant per family;
+  test = v7's 56 + 2 gentle held-out wild variants per family (70). Wild clips capped at 4 s. Three scoring policies
+  (300M); selection score fixed to score_v3 (no labels, so no AUC validation); conditions at 55%: full, curated,
+  curatedtn, kinematic, random, 3 seeds, 200M. Test nominal, pushes and friction as in Phase 1. Analysis: curated and
+  curatedtn against full and random, source-level bootstrap, with the test-clip rule above (drop a test clip only if
+  every condition falls in at least half of its rollouts), reported with and without the wild test clips.

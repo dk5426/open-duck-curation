@@ -1,5 +1,6 @@
 """Keyframed "wild" clips in the library format: families hop, kick, stomp, tap, dance, headbang, twist, each swept from
-gentle to beyond the servos (`--demo`: the five gallery demos).
+gentle to beyond the servos (`--demo`: the five gallery demos), plus HELDOUT gentle variants for val / test (used by
+make_v8.py). Clips are at most 4 s, the library's length.
 
 No split and no feasibility label yet. Each clip is a few keyframes of base offset and foot targets,
 eased with min-jerk and solved by inverse kinematics (both legs, all five joints, damped least squares) with the base
@@ -120,10 +121,9 @@ def build(m, d, qadr, fam, prm):
         dur = tt + 0.8
     elif fam == "kick":
         dur = 3.2
-    elif fam == "stomp":
-        dur = 0.6 + 4 * prm["period"]
-    elif fam == "tap":
-        dur = 0.6 + 4 * prm["period"]
+    elif fam in ("stomp", "tap"):  # as many alternating steps as fit in the library's 4 s, at least two
+        n_steps = max(2, min(4, int(3.4 / prm["period"]) // 2 * 2))
+        dur = 0.6 + n_steps * prm["period"]
     else:
         dur = 4.0
     T = int(dur * FPS)
@@ -152,7 +152,7 @@ def build(m, d, qadr, fam, prm):
         dy = prm.get("dy", 0.04)
         keys_b, keys_l, keys_r = [(0.2, Z)], [(0.2, Z)], [(0.2, Z)]
         tt = 0.2
-        for side in (+1, -1, +1, -1):
+        for side in [+1, -1] * (n_steps // 2):
             keys_b += [(tt + 0.35 * P, [0, side * dy, 0.01]), (tt + P, [0, side * dy, 0.01])]
             sw = keys_r if side > 0 else keys_l
             up = [0.01, 0, prm["lift"]] if fam == "stomp" else [prm["reach"], -side * 0.5 * prm["reach"], 0.012]
@@ -194,7 +194,7 @@ def grid(only_demo=False):
     """(family, params, id) for the clip family sweep, spanning gentle to beyond the servos."""
     out = []
     def add(fam, prm):
-        out.append((fam, prm, f"{fam}__" + "_".join(f"{k}{v:g}" for k, v in prm.items())))
+        out.append((fam, prm, clip_id(fam, prm)))
     if only_demo:
         for fam, prm in (("hop", dict(h=0.02, n=1)), ("kick", dict(r=0.06, tau=0.2)), ("stomp", dict(lift=0.035, period=0.95)),
                          ("dance", dict(f=2.0, a=1.0)), ("headbang", dict(f=3.0, a=0.5))):
@@ -221,6 +221,23 @@ def grid(only_demo=False):
         for a in (0.15, 0.3):
             add("twist", dict(f=f, a=a))
     return out
+
+
+HELDOUT = {  # gentle variants at parameters no train clip has: val 1, test 2 per family (weight shift 4.5 cm)
+    "val": [("hop", dict(h=0.0075, n=2)), ("kick", dict(r=0.045, tau=0.4, dy=0.045)),
+            ("stomp", dict(lift=0.02, period=1.4, dy=0.045)), ("tap", dict(reach=0.035, period=1.4, dy=0.045)),
+            ("dance", dict(f=1.25, a=0.6)), ("headbang", dict(f=1.5, a=0.25)), ("twist", dict(f=1.0, a=0.2))],
+    "test": [("hop", dict(h=0.005, n=1)), ("hop", dict(h=0.008, n=1)),
+             ("kick", dict(r=0.04, tau=0.5, dy=0.045)), ("kick", dict(r=0.05, tau=0.35, dy=0.045)),
+             ("stomp", dict(lift=0.02, period=1.6, dy=0.045)), ("stomp", dict(lift=0.025, period=1.2, dy=0.045)),
+             ("tap", dict(reach=0.03, period=1.6, dy=0.045)), ("tap", dict(reach=0.04, period=1.4, dy=0.045)),
+             ("dance", dict(f=1.25, a=0.8)), ("dance", dict(f=1.75, a=0.5)),
+             ("headbang", dict(f=1.5, a=0.35)), ("headbang", dict(f=1.0, a=0.4)),
+             ("twist", dict(f=0.75, a=0.25)), ("twist", dict(f=1.25, a=0.15))]}
+
+
+def clip_id(fam, prm):
+    return f"{fam}__" + "_".join(f"{k}{v:g}" for k, v in prm.items())
 
 
 def main():
