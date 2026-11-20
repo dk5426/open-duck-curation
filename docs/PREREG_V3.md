@@ -100,3 +100,10 @@ run; pushes 0.3 / 0.6 m/s and friction × 0.6 at 55% and full; 10 rollouts per c
 | Pierrick Rugery | |
 
 ## Amendments
+- 2026-11-20, data freeze before any v9 training: `data/clips_v9` at commit c2a07be (`docs/DATASET_V9.md`). 221
+  clips: train 109 = 84 clean (6 per type) + 25 broken (22.9%; 16 impossible: 5 shove, 3 joint limit, 2 take-off,
+  3 speed, 3 one foot long; 9 corrupted: 3 noise, 3 glitch, 3 foot skate), val 42 (3 per type), test 70 (5 per type).
+  Departures from §1 recorded in DATASET_V9.md: gait shoves are 7 cm backwards (12 cm forward is out of the legs'
+  reach), the speed bar is 0.698 rad (worst of 64 clean v7 gait clips), 9 clean gait sources that failed the kinematic
+  check were swapped for spares. Clean-only for the dose check = the 84 train clips with `feasibility.corrupted` false.
+  The dose check's full run is named cv9_full_s0 and is re-used as Phase 1's full seed 0 (same settings).
