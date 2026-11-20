@@ -118,6 +118,8 @@ def main():
     p.add_argument("--fixed-score", default=None, help="selection score fixed in advance (a library without feasibility "
                    "labels: no AUC validation)")
     p.add_argument("--no-extras", action="store_true", help="skip the checked and curatedscore conditions")
+    p.add_argument("--tn-groups", choices=("stationary", "type"), default="stationary", help="type-normalised score: "
+                   "motion groups (cv7: the stationary types and leans form one group; v9: every type its own group)")
     p.add_argument("--analysis", choices=("curve", "none"), default="curve", help="none: stop after training and test "
                    "evaluation (a study with its own analysis)")
     a = p.parse_args()
@@ -285,7 +287,8 @@ def main():
             tnr = json.load(open(cpath_))["1. typenorm_val"]
         else:  # the same definition as score_candidates.py, from each scorer's final checkpoint on the val clips
             vids = [c["id"] for c in man["clips"] if c["split"] == "val"]
-            grp = lambda i: "stationary" if cat[i] in STATIONARY else cat[i]  # noqa: E731
+            grp = (lambda i: cat[i]) if a.tn_groups == "type" else (  # noqa: E731
+                lambda i: "stationary" if cat[i] in STATIONARY else cat[i])
             os.makedirs(os.path.join(OUT, "score_candidates"), exist_ok=True)
             tn_per = []
             for k, name in zip(a.score_seeds, scorers):
