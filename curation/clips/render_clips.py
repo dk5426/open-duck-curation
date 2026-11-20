@@ -27,6 +27,11 @@ def main():
     p.add_argument("--cols", type=int, default=2)
     p.add_argument("--cam-z", type=float, default=0.12, help="camera look-at height (m)")
     p.add_argument("--cam-dist", type=float, default=0.75, help="camera distance (m)")
+    p.add_argument("--tile", type=int, nargs=2, default=(300, 260), metavar=("W", "H"), help="tile size (px)")
+    p.add_argument("--step", type=int, default=2, help="render every n-th frame (GIF plays at 50/n fps)")
+    p.add_argument("--colors", type=int, default=128)
+    p.add_argument("--by-split", action="store_true", help="order tiles train, broken train, val, test and mark broken "
+                   "clips (manifest 'contaminant') with BROKEN: <kind>")
     a = p.parse_args()
     from PIL import Image, ImageDraw, ImageFont
 
@@ -36,7 +41,7 @@ def main():
     m = mujoco.MjModel.from_xml_string(epath.Path(SCENE).read_text(), assets=base.get_assets())
     d = mujoco.MjData(m)
     qadr = np.array([m.jnt_qposadr[m.actuator_trnid[i, 0]] for i in range(m.nu)])
-    W, H = 300, 260
+    W, H = a.tile
     r = mujoco.Renderer(m, H, W)
     cam = mujoco.MjvCamera()
     cam.type = mujoco.mjtCamera.mjCAMERA_FREE
@@ -47,11 +52,13 @@ def main():
     cats = sorted(set(c["category"] for c in man["clips"]))
     for cat in cats:
         clips = [c for c in man["clips"] if c["category"] == cat]
+        if a.by_split:
+            clips.sort(key=lambda c: (("train", "val", "test").index(c["split"]) * 2 + bool(c.get("contaminant")), c["id"]))
         cols = min(a.cols, len(clips))
         rows = (len(clips) + cols - 1) // cols
         frames = []
         T = max(c["length"] for c in clips)
-        for k in range(0, T, 2):
+        for k in range(0, T, a.step):
             sheet = Image.new("RGB", (cols * W, rows * H), (0, 0, 0))
             for n, c in enumerate(clips):
                 i = c["index"]
@@ -69,12 +76,21 @@ def main():
                 short = c["id"].replace(cat + "__", "")
                 dr.text((5, 2), short[:44], fill=(255, 255, 255), font=font)
                 ck = c["check"]
-                dr.text((5, 18), f"{c['split']} | peak {ck['peak_joint_speed_rad_s']:.1f} rad/s | t {kk / 50:.1f}s",
-                        fill=(255, 210, 90) if ck.get("fast_for_servo") else (150, 230, 150), font=small)
+                if c.get("contaminant") and a.by_split:
+                    dr.rectangle([0, 34, W, 52], fill=(170, 20, 20))
+                    dr.text((5, 36), f"BROKEN: {c['contaminant']}", fill=(255, 255, 255), font=font)
+                    dr.text((5, 18), f"{c['split'].upper()} | t {kk / 50:.1f}s", fill=(255, 140, 140), font=small)
+                elif a.by_split:
+                    dr.text((5, 18), f"{c['split'].upper()} | peak {ck['peak_joint_speed_rad_s']:.1f} rad/s | t {kk / 50:.1f}s",
+                            fill={"train": (150, 230, 150), "val": (140, 190, 255), "test": (255, 210, 90)}[c["split"]],
+                            font=small)
+                else:
+                    dr.text((5, 18), f"{c['split']} | peak {ck['peak_joint_speed_rad_s']:.1f} rad/s | t {kk / 50:.1f}s",
+                            fill=(255, 210, 90) if ck.get("fast_for_servo") else (150, 230, 150), font=small)
                 sheet.paste(img, ((n % cols) * W, (n // cols) * H))
-            frames.append(sheet.quantize(colors=128))
+            frames.append(sheet.quantize(colors=a.colors))
         path = os.path.join(a.out, f"{cat}.gif")
-        frames[0].save(path, save_all=True, append_images=frames[1:], duration=40, loop=0, optimize=True)
+        frames[0].save(path, save_all=True, append_images=frames[1:], duration=20 * a.step, loop=0, optimize=True)
         print("GIF:", path, f"({len(clips)} clips)")
 
 
