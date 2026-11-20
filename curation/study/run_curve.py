@@ -28,6 +28,8 @@ Steps (each skipped if its output exists, so the driver can be restarted):
      f* = the fraction with the lowest mean over seeds, the main fraction if within 0.01 -> fstar.json
   4c. --strat (exploratory, amended 11-17 after interim results): curatedstrat at the main fraction and f*, the
      curated ranking with a proportional floor (each val / test category first keeps its best ceil(f x n) train clips)
+  4d. --tn (exploratory, 11-19 after Phase 1): curatedtn at the main fraction, ranked by the type-normalised score from
+     curation/analysis/score_candidates.py (needs results/<tag>/score_candidates/candidates.json)
   5. analysis: curation/analysis/curve_analysis.py -> SUMMARY.md, DONE
 """
 
@@ -110,6 +112,8 @@ def main():
     p.add_argument("--rollouts", type=int, default=10)
     p.add_argument("--fstar", action="store_true", help="after the finals, pick f* on validation (amendment 11-16)")
     p.add_argument("--strat", action="store_true", help="exploratory stratified curation at the main fraction and f*")
+    p.add_argument("--tn", action="store_true", help="exploratory type-normalised curation at the main fraction "
+                   "(ranking from score_candidates.py)")
     a = p.parse_args()
     a.lib = os.path.abspath(a.lib)
     rs.a = argparse.Namespace(lib=a.lib)
@@ -261,6 +265,21 @@ def main():
                 strat[(f, seed)] = S.submit(f"{T}_curatedstrat_f{f}_s{seed}", a.final_steps, prio=1, seed=seed,
                                             clips=path, on_done=lambda n, g: evals(n, g, a.main))
         S.wait_for(list(strat.values()))
+        while futures:
+            futures.pop().result()
+
+    # 4d. exploratory (11-19, after Phase 1): curation by the type-normalised score (score_candidates.py, candidate
+    # "1. typenorm_val": score_v3 over the median of the clip's motion group's clean val clips), same coverage rule
+    if a.tn:
+        tnr = json.load(open(os.path.join(OUT, "score_candidates", "candidates.json")))["1. typenorm_val"]
+        ids = with_coverage(sorted(tid, key=lambda i: (tnr[i], i)), int(round(a.main / 100 * len(tid))), cat, judged)
+        path = os.path.join(SUB, f"curatedtn_f{a.main}.json")
+        json.dump(ids, open(path, "w"), indent=1)
+        rs.log(f"subset curatedtn_f{a.main}: {len(ids)} clips, clean {sum(cat[i] != 'lean' for i in ids)}, "
+               f"leans {sum(cat[i] == 'lean' for i in ids)}, measured infeasible {sum(infeasible[i] for i in ids)}")
+        tn = [S.submit(f"{T}_curatedtn_f{a.main}_s{seed}", a.final_steps, prio=1, seed=seed, clips=path,
+                       on_done=lambda n, g: evals(n, g, a.main)) for seed in a.seeds]
+        S.wait_for(tn)
         while futures:
             futures.pop().result()
 

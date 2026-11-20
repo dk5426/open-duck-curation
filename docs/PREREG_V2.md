@@ -225,3 +225,18 @@ Phase 3 result exists.
   (7) If a run's wall-clock lands far from the budget (another job on the GPU), the step count is not changed; the
   report gives each run's wall-clock.
   Conditions: full, curated, kinematic, oracle, random at the Phase 2 fraction, 3 seeds each.
+- 2026-11-19, after Phase 1, all **exploratory** (owner's request; order: this, then the wild-clip study, then Phase 2):
+  (1) selection-score candidates from the scoring policies' evaluations only (`curation/analysis/score_candidates.py`
+  -> `results/cv7/SCORE_CANDIDATES.md`): type-normalised score, learning progress, balance only, a val-based
+  threshold. AUC feasible vs infeasible: type-normalised against the clean val clips 0.978, balance 0.966, current
+  score_v3 0.861, learning progress 0.59-0.60; the threshold keeps 72-81 of 82 clips.
+  (2) `curatedtn_f55`: curation by the type-normalised score (score_v3 over the median score_v3 of the clean val clips
+  of the clip's motion group; crouch, bow, sway, head and lean form one "stationary" group), same coverage rule, 45
+  clips: 35 clean, 2 infeasible. 3 seeds, 200M, launched 11-19 before any of its results (`run_curve.py --tn`).
+  Caveat: grouping leans with the stationary moves uses knowing that a lean is a held pose.
+  (3) Wild-clip study, planned: keyframed hop, kick, stomp, tap, dance, headbang, twist clips swept from gentle to
+  beyond the robot (`curation/clips/make_wild.py`), mixed with the clean v7 clips, no leans. No feasibility labels and
+  no oracle: conditions full, curated, type-normalised curation, kinematic, random. A reference-only physics check
+  (`curation/clips/dynamic_check.py`) marks every v7 walking gait infeasible, so it is reported as a description only.
+  Test set: the clean v7 test clips plus held-out gentle wild variants. Test-clip rule, fixed before any result: a
+  test clip is dropped from the analysis if every condition falls in at least half of its rollouts.

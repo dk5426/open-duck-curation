@@ -25,6 +25,8 @@ def main():
     p.add_argument("--lib", required=True)
     p.add_argument("--out", required=True)
     p.add_argument("--cols", type=int, default=2)
+    p.add_argument("--cam-z", type=float, default=0.12, help="camera look-at height (m)")
+    p.add_argument("--cam-dist", type=float, default=0.75, help="camera distance (m)")
     a = p.parse_args()
     from PIL import Image, ImageDraw, ImageFont
 
@@ -38,7 +40,7 @@ def main():
     r = mujoco.Renderer(m, H, W)
     cam = mujoco.MjvCamera()
     cam.type = mujoco.mjtCamera.mjCAMERA_FREE
-    cam.distance, cam.elevation, cam.azimuth = 0.75, -18.0, 135.0
+    cam.distance, cam.elevation, cam.azimuth = a.cam_dist, -18.0, 135.0
     font = ImageFont.truetype("DejaVuSans-Bold.ttf", 12)
     small = ImageFont.truetype("DejaVuSans.ttf", 11)
     home_z = m.keyframe("home").qpos[2]
@@ -59,7 +61,7 @@ def main():
                 d.qpos[3:7] = lib["base_quat"][i, kk]
                 d.qpos[qadr] = lib["q"][i, kk]
                 mujoco.mj_kinematics(m, d)
-                cam.lookat[:] = [d.qpos[0], d.qpos[1], 0.12]
+                cam.lookat[:] = [d.qpos[0], d.qpos[1], a.cam_z]
                 r.update_scene(d, cam)
                 img = Image.fromarray(r.render())
                 dr = ImageDraw.Draw(img)
