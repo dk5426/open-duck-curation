@@ -1,5 +1,6 @@
 """Render every clip of a library as a kinematic replay (base pose + joints from the clip, no physics), one GIF per
-category with the clips side by side, labelled with id, split and check results.
+category with the clips side by side, labelled with id, split and check results. --per-clip writes one GIF per clip
+into <out>/<train|train_broken|val|test>/<id>.gif instead; --plain drops the label bar; --ids renders only those clips.
 
   cd Open_Duck_Playground && MUJOCO_GL=osmesa .venv/bin/python ../open-duck-curation/curation/clips/render_clips.py \
       --lib ../open-duck-curation/data/clips_v1 --out ../open-duck-curation/results/clips_v1
@@ -32,6 +33,10 @@ def main():
     p.add_argument("--colors", type=int, default=128)
     p.add_argument("--by-split", action="store_true", help="order tiles train, broken train, val, test and mark broken "
                    "clips (manifest 'contaminant') with BROKEN: <kind>")
+    p.add_argument("--per-clip", action="store_true", help="one GIF per clip, in a folder per split (broken train "
+                   "clips in train_broken)")
+    p.add_argument("--plain", action="store_true", help="no label bar")
+    p.add_argument("--ids", nargs="+", help="render only these clip ids")
     a = p.parse_args()
     from PIL import Image, ImageDraw, ImageFont
 
@@ -49,9 +54,14 @@ def main():
     font = ImageFont.truetype("DejaVuSans-Bold.ttf", 12)
     small = ImageFont.truetype("DejaVuSans.ttf", 11)
     home_z = m.keyframe("home").qpos[2]
-    cats = sorted(set(c["category"] for c in man["clips"]))
-    for cat in cats:
-        clips = [c for c in man["clips"] if c["category"] == cat]
+    pool = [c for c in man["clips"] if not a.ids or c["id"] in a.ids]
+    if a.per_clip:
+        groups = [(c["category"], [c], os.path.join(a.out, c["split"] + ("_broken" if c.get("contaminant") else ""),
+                                                     c["id"] + ".gif")) for c in pool]
+    else:
+        groups = [(cat, [c for c in pool if c["category"] == cat], os.path.join(a.out, f"{cat}.gif"))
+                  for cat in sorted(set(c["category"] for c in pool))]
+    for cat, clips, path in groups:
         if a.by_split:
             clips.sort(key=lambda c: (("train", "val", "test").index(c["split"]) * 2 + bool(c.get("contaminant")), c["id"]))
         cols = min(a.cols, len(clips))
@@ -71,6 +81,9 @@ def main():
                 cam.lookat[:] = [d.qpos[0], d.qpos[1], a.cam_z]
                 r.update_scene(d, cam)
                 img = Image.fromarray(r.render())
+                if a.plain:
+                    sheet.paste(img, ((n % cols) * W, (n // cols) * H))
+                    continue
                 dr = ImageDraw.Draw(img)
                 dr.rectangle([0, 0, W, 34], fill=(0, 0, 0))
                 short = c["id"].replace(cat + "__", "")
@@ -89,7 +102,7 @@ def main():
                             fill=(255, 210, 90) if ck.get("fast_for_servo") else (150, 230, 150), font=small)
                 sheet.paste(img, ((n % cols) * W, (n // cols) * H))
             frames.append(sheet.quantize(colors=a.colors))
-        path = os.path.join(a.out, f"{cat}.gif")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         frames[0].save(path, save_all=True, append_images=frames[1:], duration=20 * a.step, loop=0, optimize=True)
         print("GIF:", path, f"({len(clips)} clips)")
 
