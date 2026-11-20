@@ -28,7 +28,8 @@ Steps (each skipped if its output exists, so the driver can be restarted):
      f* = the fraction with the lowest mean over seeds, the main fraction if within 0.01 -> fstar.json
   4c. --strat (exploratory, amended 11-17 after interim results): curatedstrat at the main fraction and f*, the
      curated ranking with a proportional floor (each val / test category first keeps its best ceil(f x n) train clips)
-  4d. --tn (exploratory, 11-19 after Phase 1): curatedtn at the main fraction, ranked by the type-normalised score from
+  4d. --tn (exploratory in cv7; pre-registered in v9 with --tn-all --tn-groups type): curatedtn, queued with the
+     finals, at the main fraction (or every fraction with --tn-all), ranked by the type-normalised score from
      curation/analysis/score_candidates.py (needs results/<tag>/score_candidates/candidates.json)
   5. analysis: curation/analysis/curve_analysis.py -> SUMMARY.md, DONE
 """
@@ -118,6 +119,7 @@ def main():
     p.add_argument("--fixed-score", default=None, help="selection score fixed in advance (a library without feasibility "
                    "labels: no AUC validation)")
     p.add_argument("--no-extras", action="store_true", help="skip the checked and curatedscore conditions")
+    p.add_argument("--tn-all", action="store_true", help="type-normalised curation at every fraction, not only the main")
     p.add_argument("--tn-groups", choices=("stationary", "type"), default="stationary", help="type-normalised score: "
                    "motion groups (cv7: the stationary types and leans form one group; v9: every type its own group)")
     p.add_argument("--analysis", choices=("curve", "none"), default="curve", help="none: stop after training and test "
@@ -136,6 +138,7 @@ def main():
     cat = {c["id"]: c["category"] for c in man["clips"]}
     judged = {c["category"] for c in man["clips"] if c["split"] in ("val", "test")}
     infeasible = {c["id"]: bool(c["feasibility"]["infeasible"]) for c in train}
+    broken = {c["id"]: bool(c["feasibility"].get("corrupted", c["feasibility"]["infeasible"])) for c in train}
     rs.log(f"curve study {T}: library {a.lib}, {len(tid)} train clips ({sum(infeasible.values())} measured infeasible), "
            f"fractions {a.fractions}, selectors {a.selectors}, seeds {a.seeds}, GPUs {a.gpus}")
     S = rs.Scheduler(a.gpus)
@@ -242,7 +245,39 @@ def main():
                 path = subsets[(s_, f, seed if s_ == "random" else None)]
                 finals[(s_, f, seed)] = S.submit(f"{T}_{s_}_f{f}_s{seed}", a.final_steps, prio=1 if f == a.main else 3,
                                                  seed=seed, clips=path, on_done=lambda n, g, f=f: evals(n, g, f))
-    S.wait_for(list(finals.values()))
+    # 4d. (exploratory in cv7, pre-registered in v9) queued with the finals: curation by the type-normalised score
+    # (score_candidates.py, candidate
+    # "1. typenorm_val": score_v3 over the median of the clip's motion group's clean val clips), same coverage rule
+    if a.tn:
+        cpath_ = os.path.join(OUT, "score_candidates", "candidates.json")
+        if os.path.exists(cpath_):
+            tnr = json.load(open(cpath_))["1. typenorm_val"]
+        else:  # the same definition as score_candidates.py, from each scorer's final checkpoint on the val clips
+            vids = [c["id"] for c in man["clips"] if c["split"] == "val"]
+            grp = (lambda i: cat[i]) if a.tn_groups == "type" else (  # noqa: E731
+                lambda i: "stationary" if cat[i] in STATIONARY else cat[i])
+            os.makedirs(os.path.join(OUT, "score_candidates"), exist_ok=True)
+            tn_per = []
+            for k, name in zip(a.score_seeds, scorers):
+                f = os.path.join(OUT, "score_candidates", f"scores_val_s{k}_final.json")
+                rs.run_eval(rs.final_ckpt(name), "val", a.rollouts, f, a.gpus[0])
+                vv = json.load(open(f))["clips"]
+                med = {g: float(np.median([vv[i]["score_v3"] for i in vids if grp(i) == g])) for g in {grp(i) for i in vids}}
+                tn_per.append({i: per[k][i]["score_v3"] / med[grp(i)] for i in tid})
+            tnr = {i: float(np.mean([t[i] for t in tn_per])) for i in tid}
+            json.dump(tnr, open(os.path.join(OUT, "score_candidates", "typenorm_val.json"), "w"), indent=1)
+        tn = []
+        for f in (a.fractions if a.tn_all else [a.main]):
+            ids = with_coverage(sorted(tid, key=lambda i: (tnr[i], i)), int(round(f / 100 * len(tid))), cat, judged)
+            path = os.path.join(SUB, f"curatedtn_f{f}.json")
+            json.dump(ids, open(path, "w"), indent=1)
+            rs.log(f"subset curatedtn_f{f}: {len(ids)} clips, broken {sum(broken[i] for i in ids)}/{sum(broken.values())}, "
+                   f"measured infeasible {sum(infeasible[i] for i in ids)}")
+            tn += [S.submit(f"{T}_curatedtn_f{f}_s{seed}", a.final_steps, prio=1 if f == a.main else 3, seed=seed,
+                            clips=path, on_done=lambda n, g, f=f: evals(n, g, f)) for seed in a.seeds]
+    else:
+        tn = []
+    S.wait_for(list(finals.values()) + tn)
     while futures:
         futures.pop().result()
 
@@ -279,36 +314,6 @@ def main():
         while futures:
             futures.pop().result()
 
-    # 4d. exploratory (11-19, after Phase 1): curation by the type-normalised score (score_candidates.py, candidate
-    # "1. typenorm_val": score_v3 over the median of the clip's motion group's clean val clips), same coverage rule
-    if a.tn:
-        cpath_ = os.path.join(OUT, "score_candidates", "candidates.json")
-        if os.path.exists(cpath_):
-            tnr = json.load(open(cpath_))["1. typenorm_val"]
-        else:  # the same definition as score_candidates.py, from each scorer's final checkpoint on the val clips
-            vids = [c["id"] for c in man["clips"] if c["split"] == "val"]
-            grp = (lambda i: cat[i]) if a.tn_groups == "type" else (  # noqa: E731
-                lambda i: "stationary" if cat[i] in STATIONARY else cat[i])
-            os.makedirs(os.path.join(OUT, "score_candidates"), exist_ok=True)
-            tn_per = []
-            for k, name in zip(a.score_seeds, scorers):
-                f = os.path.join(OUT, "score_candidates", f"scores_val_s{k}_final.json")
-                rs.run_eval(rs.final_ckpt(name), "val", a.rollouts, f, a.gpus[0])
-                vv = json.load(open(f))["clips"]
-                med = {g: float(np.median([vv[i]["score_v3"] for i in vids if grp(i) == g])) for g in {grp(i) for i in vids}}
-                tn_per.append({i: per[k][i]["score_v3"] / med[grp(i)] for i in tid})
-            tnr = {i: float(np.mean([t[i] for t in tn_per])) for i in tid}
-            json.dump(tnr, open(os.path.join(OUT, "score_candidates", "typenorm_val.json"), "w"), indent=1)
-        ids = with_coverage(sorted(tid, key=lambda i: (tnr[i], i)), int(round(a.main / 100 * len(tid))), cat, judged)
-        path = os.path.join(SUB, f"curatedtn_f{a.main}.json")
-        json.dump(ids, open(path, "w"), indent=1)
-        rs.log(f"subset curatedtn_f{a.main}: {len(ids)} clips, clean {sum(cat[i] != 'lean' for i in ids)}, "
-               f"leans {sum(cat[i] == 'lean' for i in ids)}, measured infeasible {sum(infeasible[i] for i in ids)}")
-        tn = [S.submit(f"{T}_curatedtn_f{a.main}_s{seed}", a.final_steps, prio=1, seed=seed, clips=path,
-                       on_done=lambda n, g: evals(n, g, a.main)) for seed in a.seeds]
-        S.wait_for(tn)
-        while futures:
-            futures.pop().result()
 
     if a.analysis == "none":
         open(os.path.join(OUT, "DONE"), "w").write(time.strftime("%Y-%m-%d %H:%M") + "\n")
