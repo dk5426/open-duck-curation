@@ -107,3 +107,11 @@ run; pushes 0.3 / 0.6 m/s and friction × 0.6 at 55% and full; 10 rollouts per c
   reach), the speed bar is 0.698 rad (worst of 64 clean v7 gait clips), 9 clean gait sources that failed the kinematic
   check were swapped for spares. Clean-only for the dose check = the 84 train clips with `feasibility.corrupted` false.
   The dose check's full run is named cv9_full_s0 and is re-used as Phase 1's full seed 0 (same settings).
+- 2026-11-21, f\* (§7) before any Phase 2 run: mean val e of curatedtn (final checkpoint, 10 rollouts, original
+  score) 55% 0.386, 65% 0.366, 75% 0.370 -> **f\* = 65%** (`results/cv9/fstar.json`). The Phase 1 runner scored
+  validation only at the main fraction, so these 9 evaluations were run separately on CPU. Phase 2 budget: the mean
+  cv9 PPO run is 1.552 h (48 runs), within 0.6% of cv7's, so cv7's calibrated step counts are reused
+  (`results/cv9/phase2_calibration.json`). Before Phase 2, a smoke run per learner (curatedtn, seed 0, short budgets) on
+  v9 must produce a test evaluation. Phase 2 learners in order PPO without feed-forward, SAC, DAgger, ARS, FastTD3.
+  `phase2_analysis.py` uses curatedtn as the reference condition when there is no oracle (P4: full − curatedtn gap vs
+  PPO's).

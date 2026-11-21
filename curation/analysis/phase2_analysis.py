@@ -1,9 +1,10 @@
-"""Phase 2 summary (PREREG v2 §4, P4 / P5): every learner on the Phase 1 subsets -> results/<tag>/<sub>/SUMMARY.md
+"""Phase 2 summary: every learner on the Phase 1 subsets -> results/<tag>/<sub>/SUMMARY.md
 
 PPO's row is Phase 1's test results at the same fraction. Per learner: mean test e (nominal, original score) per
-condition, curated against full and oracle, and the full - oracle gap (how much the infeasible leans hurt that
-learner); P4 / P5 compare a learner's gap with PPO's (difference of gaps, source-level bootstrap over test clips).
-All Phase 2 comparisons are SECONDARY (PREREG v2 §6): no pass bar, no multiple-comparison correction.
+condition and paired differences. The reference condition is the oracle when the study has one (PREREG v2: cv7) and
+type-normalised curation otherwise (PREREG v3: cv9); the full - reference gap is how much the broken clips cost that
+learner, and P4 / P5 compare a learner's gap with PPO's (difference of gaps, source-level bootstrap over test clips).
+All Phase 2 comparisons are SECONDARY: no pass bar, no multiple-comparison correction.
 
   cd Open_Duck_Playground && python phase2_analysis.py --tag cv7 --lib <clips_v7> [--sub phase2]
 """
@@ -63,11 +64,13 @@ def main():
         lo, hi = cc.boot_ci([x[i]["seeds"] for i in ids], [y[i]["seeds"] for i in ids], rng, cc.grp_of(ids))
         return f"{d:+.3f} [{lo:+.3f}, {hi:+.3f}]"
 
-    def gap(lr):
-        r = {c: res[(lr, c)][0] for c in ("full", "oracle")}
-        return {i: r["full"][i]["score"] - r["oracle"][i]["score"] for i in set(r["full"]) & set(r["oracle"])}
+    REF = "oracle" if "oracle" in conds else "curatedtn"
 
-    L = [f"# Study {a.tag}, Phase 2: other learners at {f}% (PREREG v2 §4)", "",
+    def gap(lr):
+        r = {c: res[(lr, c)][0] for c in ("full", REF)}
+        return {i: r["full"][i]["score"] - r[REF][i]["score"] for i in set(r["full"]) & set(r[REF])}
+
+    L = [f"# Study {a.tag}, Phase 2: other learners at {f}%", "",
          "SECONDARY (pre-registered, no pass bar, no correction for multiple comparisons). Same subsets, test clips and "
          "evaluator as Phase 1; only the learner changes. Lower e is better.", "",
          "## Mean test e (nominal), mean over seeds [seed range]", "",
@@ -88,20 +91,23 @@ def main():
         L.append(f"| {NAMES.get(lr, lr)} | " + " | ".join(
             f"{np.mean([v['completion'] for v in res[(lr, c)][0].values()]):.3f} / "
             f"{np.mean([v['falls'] for v in res[(lr, c)][0].values()]):.2f}" if (lr, c) in res else "—" for c in conds) + " |")
+    pairs = ([("curated", "full"), ("curated", "oracle"), ("full", "oracle")] if REF == "oracle" else
+             [(c, "full") for c in conds if c != "full"] + [("curatedtn", "random")])
+    pairs = [(x, y) for x, y in pairs if x in conds and y in conds]
     L += ["", "## Paired differences (source-level 95% CI; negative = the first condition better)", "",
-          "| learner | curated − full | curated − oracle | full − oracle (cost of the leans) |", "|---|---|---|---|"]
+          "| learner | " + " | ".join(f"{x} − {y}" for x, y in pairs) + " |", "|---|" + "---|" * len(pairs)]
     for lr in learners:
         g = lambda x, y: cmp(res[(lr, x)][0], res[(lr, y)][0]) if (lr, x) in res and (lr, y) in res else "—"  # noqa: E731
-        L.append(f"| {NAMES.get(lr, lr)} | {g('curated', 'full')} | {g('curated', 'oracle')} | {g('full', 'oracle')} |")
+        L.append(f"| {NAMES.get(lr, lr)} | " + " | ".join(g(x, y) for x, y in pairs) + " |")
 
-    L += ["", "## P4 / P5: is a learner hurt more by the leans than PPO?", "",
-          "Difference of gaps: (full − oracle) for the learner minus (full − oracle) for PPO, per test clip (seed means), "
-          "sources resampled. Positive = the learner is hurt more. P4 predicts positive for SAC and FastTD3, P5 for PPO "
-          "without feed-forward.", "", "| learner | difference of gaps [95% CI] |", "|---|---|"]
-    if ("ppo", "full") in res and ("ppo", "oracle") in res:
+    L += ["", f"## P4 / P5: does a learner gain more from curation ({REF}) than PPO?", "",
+          f"Difference of gaps: (full − {REF}) for the learner minus (full − {REF}) for PPO, per test clip (seed means), "
+          "sources resampled. Positive = the learner gains more. P4 predicts positive for SAC and FastTD3 (and PPO "
+          "without feed-forward).", "", "| learner | difference of gaps [95% CI] |", "|---|---|"]
+    if ("ppo", "full") in res and ("ppo", REF) in res:
         g0 = gap("ppo")
         for lr in learners[1:]:
-            if (lr, "full") not in res or (lr, "oracle") not in res:
+            if (lr, "full") not in res or (lr, REF) not in res:
                 continue
             g1 = gap(lr)
             ids = sorted(set(g0) & set(g1))
