@@ -18,6 +18,9 @@ Each value may be a comma-separated list of JSON files (one per seed).
 --group source (PREREG v2): the bootstrap resamples whole motion sources (a source's variants move together), then one
 seed per condition within each drawn clip; --loo adds a leave-one-clip-out table (the overall Δe and its CI with each
 test clip dropped in turn: the range shows whether one clip decides the result).
+
+--ci 97.5 (PREREG v3: Bonferroni over two hypotheses) widens every interval; --drop-all-fail 0.5 drops test clips on
+which every condition falls in at least half of its rollouts (PREREG v3 test-clip rule) and lists them.
 """
 
 import argparse
@@ -36,15 +39,18 @@ def load(paths, metric="score"):
             r[i]["score"] = r[i][metric]
     out = {i: {k: float(np.mean([r[i][k] for r in runs])) for k in ("score", "completion", "falls")} for i in ids}
     for i in ids:
+        out[i]["fall_rate"] = float(np.mean([r[i]["falls"] / r[i].get("rollouts", 1) for r in runs]))
+    for i in ids:
         out[i]["seeds"] = np.array([r[i]["score"] for r in runs])
     return out
 
 
 GROUPS = None  # clip index -> group index, set by main() with --group source
+CI = 95.0  # interval level, set by main() with --ci
 
 
 def boot_ci(ref, oth, rng, groups=None):
-    """95% CI of mean(ref - oth): clips (or, with groups, whole groups of clips) resampled, then one seed per condition
+    """CI (level CI) of mean(ref - oth): clips (or, with groups, whole groups of clips) resampled, then one seed per condition
     drawn within each drawn clip."""
     n = len(ref)
     if n < 2:
@@ -63,7 +69,7 @@ def boot_ci(ref, oth, rng, groups=None):
     sa = rng.integers(0, a.shape[1], size=cc.shape)
     sb = rng.integers(0, b.shape[1], size=cc.shape)
     m = ((a[cc, sa] - b[cc, sb]) * mask).sum(1) / mask.sum(1)
-    return float(np.percentile(m, 2.5)), float(np.percentile(m, 97.5))
+    return float(np.percentile(m, (100 - CI) / 2)), float(np.percentile(m, 100 - (100 - CI) / 2))
 
 
 # Numeric motion parameters that define each category's range (manifest "params"); magnitudes, so mirrored clips count
@@ -96,7 +102,7 @@ def in_train_range(man):
 
 
 def delta_table(res, ref, ids, rng):
-    rows = ["| vs | clips | Δe [95% CI] |", "|---|---|---|"]
+    rows = [f"| vs | clips | Δe [{CI:g}% CI] |", "|---|---|---|"]
     for k in res:
         if k == ref or not ids:
             continue
@@ -111,7 +117,7 @@ def grp_of(ids):
 
 
 def main():
-    global GROUPS
+    global GROUPS, CI
     p = argparse.ArgumentParser()
     p.add_argument("--manifest", required=True)
     p.add_argument("--cond", nargs="+", required=True, help="name=file[,file...]")
@@ -123,6 +129,9 @@ def main():
     p.add_argument("--group", choices=("clip", "source"), default="clip", help="bootstrap unit")
     p.add_argument("--loo", action="store_true", help="leave-one-clip-out sensitivity table")
     p.add_argument("--title", default="Test-set comparison")
+    p.add_argument("--ci", type=float, default=95.0, help="interval level in percent")
+    p.add_argument("--drop-all-fail", type=float, default=None, metavar="RATE",
+                   help="drop test clips on which every condition's fall rate is at least RATE")
     p.add_argument("--out", required=True)
     a = p.parse_args()
     man = json.load(open(a.manifest))
@@ -133,18 +142,25 @@ def main():
     res = {k: load(v, a.metric) for k, v in conds.items()}
     ids = sorted(set.intersection(*(set(r) for r in res.values())))
     ids = [i for i in ids if cat[i] not in a.exclude_category]
+    CI = a.ci
+    dropped = []
+    if a.drop_all_fail is not None:
+        dropped = [i for i in ids if all(r[i]["fall_rate"] >= a.drop_all_fail for r in res.values())]
+        ids = [i for i in ids if i not in dropped]
     cats = sorted(set(cat[i] for i in ids))
     rng = np.random.default_rng(0)
     L = [f"# {a.title}", "", f"{len(ids)} test clips ({len(set(GROUPS[i] for i in ids)) if GROUPS else len(ids)} "
          f"bootstrap units: {a.group}s), {len(cats)} categories, metric `{a.metric}`"
-         + (f" (excluded: {', '.join(a.exclude_category)})" if a.exclude_category else "") + ". Lower e is better.", "",
+         + (f" (excluded: {', '.join(a.exclude_category)})" if a.exclude_category else "") + ". Lower e is better."
+         + (f" Dropped (every condition falls in >= {a.drop_all_fail:g} of rollouts): "
+            + (", ".join(f"`{i}`" for i in dropped) or "none") + "." if a.drop_all_fail is not None else ""), "",
          "## Per condition", "", "| condition | mean e | completion | falls / clip | coverage |", "|---|---|---|---|---|"]
     for k, r in res.items():
         cov = np.mean([any(r[i]["completion"] >= 0.8 for i in ids if cat[i] == c) for c in cats])
         L.append(f"| {k} | {np.mean([r[i]['score'] for i in ids]):.3f} | {np.mean([r[i]['completion'] for i in ids]):.3f} "
                  f"| {np.mean([r[i]['falls'] for i in ids]):.2f} | {cov:.2f} |")
     L += ["", f"## {a.ref} minus each other condition (paired over test clips; negative = {a.ref} better)", "",
-          "| vs | Δe overall [95% CI] | " + " | ".join(cats) + " |", "|---|---|" + "---|" * len(cats)]
+          f"| vs | Δe overall [{CI:g}% CI] | " + " | ".join(cats) + " |", "|---|---|" + "---|" * len(cats)]
     passes = []
     for k in res:
         if k == a.ref:
