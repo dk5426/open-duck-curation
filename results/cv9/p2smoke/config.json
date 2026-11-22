@@ -1,0 +1,23 @@
+{
+ "fraction": 65,
+ "learners": [
+  "ppo_noff",
+  "sac",
+  "dagger",
+  "ars",
+  "fasttd3"
+ ],
+ "conds": [
+  "curatedtn"
+ ],
+ "seeds": [
+  0
+ ],
+ "steps": {
+  "ppo_noff": 5000000,
+  "sac": 2000000,
+  "dagger": 4100000,
+  "ars": 2000000,
+  "fasttd3": 1000000
+ }
+}

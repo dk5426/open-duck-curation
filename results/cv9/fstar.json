@@ -1,0 +1,31 @@
+{
+ "fstar": 65,
+ "rule": "PREREG v3 \u00a77: curatedtn keep-fraction with the lowest mean val e over 3 seeds (final checkpoint, 10 rollouts, original score), restricted to 55/65/75; 55 if within 0.01 of the best",
+ "val_e": {
+  "55": {
+   "mean": 0.3857,
+   "seeds": [
+    0.3774,
+    0.3794,
+    0.4003
+   ]
+  },
+  "65": {
+   "mean": 0.3656,
+   "seeds": [
+    0.36,
+    0.3631,
+    0.3738
+   ]
+  },
+  "75": {
+   "mean": 0.3703,
+   "seeds": [
+    0.3727,
+    0.373,
+    0.3651
+   ]
+  }
+ },
+ "best": 65
+}
