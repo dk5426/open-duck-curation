@@ -1,0 +1,14 @@
+{
+ "_rule": "Fixed 2026-11-22 before any tuning run (PREREG v3 amendment). Every learner: its published defaults ('base') plus the same 3 variants: learning rate / 3, learning rate x 3, and one learner-specific knob (discount 0.97 <-> 0.99 for learners with a critic, exploration noise x 2 for ARS, 2x epochs for DAgger). Keys are PPO_OVERRIDES_JSON (ppo) or ALT_OVERRIDES_JSON (others) fields.",
+ "ppo": {"base": {}, "lr_div3": {"learning_rate": 1e-4}, "lr_x3": {"learning_rate": 9e-4}, "gamma099": {"discounting": 0.99}},
+ "fasttd3": {"base": {},
+             "lr_div3": {"critic_learning_rate": 1e-4, "actor_learning_rate": 1e-4, "critic_learning_rate_end": 1e-4, "actor_learning_rate_end": 1e-4},
+             "lr_x3": {"critic_learning_rate": 9e-4, "actor_learning_rate": 9e-4, "critic_learning_rate_end": 9e-4, "actor_learning_rate_end": 9e-4},
+             "gamma099": {"gamma": 0.99}},
+ "fastsac": {"base": {},
+             "lr_div3": {"critic_learning_rate": 1e-4, "actor_learning_rate": 1e-4},
+             "lr_x3": {"critic_learning_rate": 9e-4, "actor_learning_rate": 9e-4},
+             "gamma097": {"gamma": 0.97}},
+ "ars": {"base": {}, "lr_div3": {"step_size": 0.005}, "lr_x3": {"step_size": 0.045}, "noise_x2": {"exploration_noise_std": 0.05}},
+ "dagger": {"base": {}, "lr_div3": {"learning_rate": 1e-4}, "lr_x3": {"learning_rate": 9e-4}, "epochs_x2": {"epochs": 8}}
+}
