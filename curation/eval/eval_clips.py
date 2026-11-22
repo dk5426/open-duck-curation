@@ -83,7 +83,7 @@ def learner_meta(ckpt):
 
 def load_policy(ckpt, env):
     meta = learner_meta(ckpt)
-    if meta and meta["learner"] in ("sac", "ars", "fasttd3"):
+    if meta and meta["learner"] in ("sac", "ars", "fasttd3", "fastsac"):
         sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "study"))
         from train_alt import load_alt_policy
         return load_alt_policy(ckpt, env, meta)

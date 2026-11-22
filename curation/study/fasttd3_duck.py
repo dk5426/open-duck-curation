@@ -14,6 +14,9 @@ Hyperparameters: FastTD3's MuJoCo Playground defaults (num_envs 1024, gamma 0.97
 2 updates per step, distributional clipped double-Q critic 1024 wide, actor 512-256-128), with the replay buffer cut to
 2048 steps per env and 256 evaluation envs to fit the 16 GB GPUs, no rendering and no wandb, and torch.compile off
 (Triton fails to compile its kernels on these RTX A4000s, "PassManager::run failed").
+ALT_OVERRIDES_JSON (a JSON dict) maps each key to the train.py flag of that name (e.g. {"critic_learning_rate": 1e-4,
+"gamma": 0.99, "num_envs": 2048} -> --critic_learning_rate 1e-4 --gamma 0.99 --num_envs 2048; booleans as --key /
+--no-key); learner.json records the resulting FastTD3 arguments (hyperparameters) and the overrides.
 """
 
 import argparse
@@ -151,11 +154,17 @@ def main():
     mod.make_env = make_env_factory(a.task, a.num_envs)
     import environments  # noqa: F401  (FastTD3's package; its Playground module is replaced below)
     sys.modules["environments.mujoco_playground_env"] = mod
+    over = json.loads(os.environ.get("ALT_OVERRIDES_JSON", "{}"))
+    a.num_envs = int(over.get("num_envs", a.num_envs))
     iters = -(-a.num_timesteps // a.num_envs)
-    sys.argv = ["train.py", "--env_name", "OpenDuckTracking", "--exp_name", "phase2", "--seed", str(a.seed),
-                "--num_envs", str(a.num_envs), "--num_eval_envs", "256", "--buffer_size", "2048",
-                "--total_timesteps", str(iters), "--eval_interval", str(max(iters // 5, 1)), "--render_interval", "0",
-                "--save_interval", str(max(iters // 5, 1)), "--no-use_wandb", "--no-compile"]
+    flags = {"env_name": "OpenDuckTracking", "exp_name": "phase2", "seed": a.seed, "num_envs": a.num_envs,
+             "num_eval_envs": 256, "buffer_size": 2048, "total_timesteps": iters, "eval_interval": max(iters // 5, 1),
+             "render_interval": 0, "save_interval": max(iters // 5, 1), "use_wandb": False, "compile": False, **over}
+    sys.argv = ["train.py"]
+    for k, v in flags.items():
+        sys.argv += [f"--{k}" if v else f"--no-{k}"] if isinstance(v, bool) else [f"--{k}", str(v)]
+    from hyperparams import get_args
+    hp = vars(get_args())  # the arguments train.py will parse
     os.makedirs(a.output_dir, exist_ok=True)
     cwd = os.getcwd()
     os.chdir(a.output_dir)
@@ -166,7 +175,9 @@ def main():
     final = max(glob.glob(os.path.join(a.output_dir, "models", "*_final.pt")), key=os.path.getmtime)
     meta_f = os.path.join(a.output_dir, "learner.json")
     meta = json.load(open(meta_f))
-    meta.update(wall_clock_s=time.time() - t0, vector_steps=iters, num_envs=a.num_envs, fasttd3_args=sys.argv[1:])
+    plain = lambda v: v if isinstance(v, (int, float, str, bool, type(None))) else str(v)  # noqa: E731
+    meta.update(wall_clock_s=time.time() - t0, vector_steps=iters, num_envs=a.num_envs, fasttd3_args=sys.argv[1:],
+                alt_overrides=over, hyperparameters={k: plain(v) for k, v in hp.items()})
     json.dump(meta, open(meta_f, "w"), indent=1)
     export_actor(final, a.output_dir, iters * a.num_envs)
 

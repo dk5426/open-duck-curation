@@ -14,6 +14,7 @@ observation as the Phase 1 PPO runs; only the learner changes.
             DAgger iteration. Teacher = the Phase 1 PPO final policy of the SAME condition (clip list) and seed
             (--teacher), so the student only sees the clips its teacher was trained on
   fasttd3   FastTD3's own train.py in its own torch venv, on this env (fasttd3_duck.py)
+  fastsac   Holosoma's FastSAC (ported, Apache-2.0) in FastTD3's torch venv, on the same env bridge (fastsac_duck.py)
 
 Every learner runs under launch_train.sh (TRAIN_ENTRY=<this file>) and writes, like PPO, checkpoint dirs
 <output_dir>/<date>_<step> plus learner.json, which eval_clips.py reads to rebuild the policy (load_alt_policy) and
@@ -97,12 +98,12 @@ def train(a):
         OpenDuckMiniV2Runner(argparse.Namespace(output_dir=a.output_dir, num_timesteps=a.num_timesteps, env="tracking",
                                                 task=a.task, restore_checkpoint_path=None)).train()
         return
-    if a.learner == "fasttd3":  # torch: its own venv (fasttd3_duck.py)
+    if a.learner in ("fasttd3", "fastsac"):  # torch: FastTD3's venv (fasttd3_duck.py, fastsac_duck.py)
         here = os.path.dirname(os.path.abspath(__file__))
         root = os.path.abspath(os.path.join(here, "..", "..", ".."))
         py = os.environ.get("FASTTD3_PY", os.path.join(root, "fasttd3", ".venv", "bin", "python"))
         os.environ.setdefault("FASTTD3_SRC", os.path.join(root, "fasttd3", "fast_td3"))
-        os.execv(py, [py, os.path.join(here, "fasttd3_duck.py"), "--num_timesteps", str(a.num_timesteps),
+        os.execv(py, [py, os.path.join(here, f"{a.learner}_duck.py"), "--num_timesteps", str(a.num_timesteps),
                       "--output_dir", a.output_dir, "--task", a.task, "--seed", str(a.seed)])
 
     import jax
@@ -203,7 +204,7 @@ def load_alt_policy(ckpt, env, meta):
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "eval"))
     from eval_clips import restore_params
     n_obs, nu = int(env.observation_size["state"][0]), env.action_size
-    if meta["learner"] == "fasttd3":
+    if meta["learner"] in ("fasttd3", "fastsac"):
         p, norm = None, None
     else:
         p = restore_params(ckpt)
@@ -226,6 +227,27 @@ def load_alt_policy(ckpt, env, meta):
                 x = x @ W[i].T + b[i]
                 x = jp.tanh(x) if i == n - 1 else jax.nn.relu(x)
             return x, {}
+    elif meta["learner"] == "fastsac":  # fastsac_duck.py's export: normalizer, 3 x (Linear, LayerNorm, SiLU), mean head
+        z = np.load(os.path.join(ckpt, "fastsac_actor.npz"))
+        n = sum(k.startswith("W") for k in z.files)
+        W = [jp.asarray(z[f"W{i}"]) for i in range(n)]
+        b = [jp.asarray(z[f"b{i}"]) for i in range(n)]
+        ln = [(jp.asarray(z[f"ln_g{i}"]), jp.asarray(z[f"ln_b{i}"])) if f"ln_g{i}" in z.files else None
+              for i in range(n - 1)]
+        mean, scale, ln_eps = jp.asarray(z["mean"]), jp.asarray(z["std"]) + float(z["eps"]), float(z["ln_eps"])
+        a_scale, a_bias = jp.asarray(z["action_scale"]), jp.asarray(z["action_bias"])
+        hi = jax.lax.Precision.HIGHEST  # no TF32, so the replay matches the fp32 torch actor
+
+        def pol(obs, key):
+            x = (obs - mean) / scale
+            for i in range(n - 1):
+                x = jp.matmul(x, W[i].T, precision=hi) + b[i]
+                if ln[i] is not None:
+                    mu = x.mean(-1, keepdims=True)
+                    x = (x - mu) / jp.sqrt(jp.square(x - mu).mean(-1, keepdims=True) + ln_eps) * ln[i][0] + ln[i][1]
+                x = jax.nn.silu(x)
+            mu_a = jp.matmul(x, W[n - 1].T, precision=hi) + b[n - 1]  # Gaussian mean; deterministic action tanh(mean)
+            return jp.tanh(mu_a) * a_scale + a_bias, {}
     elif meta["learner"] == "ars":
         from brax.training.agents.ars import networks as ars_networks
         net = ars_networks.make_policy_network(n_obs, nu, preprocess_observations_fn=running_statistics.normalize)
@@ -237,7 +259,7 @@ def load_alt_policy(ckpt, env, meta):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--learner", required=True, choices=["ppo_noff", "sac", "ars", "dagger", "fasttd3"])
+    p.add_argument("--learner", required=True, choices=["ppo_noff", "sac", "ars", "dagger", "fasttd3", "fastsac"])
     p.add_argument("--num_timesteps", type=int, required=True)
     p.add_argument("--output_dir", required=True)
     p.add_argument("--task", default="flat_terrain_backlash")

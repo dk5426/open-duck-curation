@@ -33,6 +33,10 @@
   "sac": 23800000,
   "ars": 31500000,
   "dagger": 93900000,
-  "fasttd3": 54300000
- }
+  "fasttd3": 54300000,
+  "fastsac": 34500000
+ },
+ "notes": [
+  "2026-11-22 fastsac: smoke run cv9_fsmoke_fastsac_curatedtn_s0 (3M steps, GPU 2): 127 s start-up, then 6330 env steps/s (600k -> 3.0M in 379 s, evals included); (5587 - 127) s x 6330 = 34.5M"
+ ]
 }
