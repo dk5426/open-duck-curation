@@ -38,6 +38,15 @@ Broken copies (train only, category = their type, "derived_from" = the clean tra
          --gaits ../open-duck-curation/data/placo_gaits_v9 --v7 ../open-duck-curation/data/clips_v7 \
          --out ../open-duck-curation/data/clips_v9
   3. python3 curation/clips/make_v9.py --verify data/clips_v9 --doc docs/DATASET_V9.md
+
+v9x (--extend-test): clips_v9 with 7 more clean test sources per type (12 test clips per type); every clips_v9 clip
+is copied unchanged (same id, index and arrays), the new ones are appended with "new_in": "v9x". New sources follow
+the rules above (new values, one variant each, same clean checks, failing sources replaced by the type's v9x spares).
+  1. python3 curation/clips/make_v9.py --extend-test data/clips_v9 --presets <reference_motion_generator dir> data/placo_gaits_v9x
+  2. cd Open_Duck_Playground && .venv/bin/python ../open-duck-curation/curation/clips/make_v9.py \
+         --extend-test ../open-duck-curation/data/clips_v9 --gaits ../open-duck-curation/data/placo_gaits_v9x \
+         --v7 ../open-duck-curation/data/clips_v7 --out ../open-duck-curation/data/clips_v9x
+  3. python3 curation/clips/make_v9.py --verify data/clips_v9x --doc docs/DATASET_V9X.md
 """
 
 import argparse
@@ -129,6 +138,56 @@ WILD = {
 }
 WILD_PRM = {"hop": lambda s: dict(h=s[0], n=s[1]), "dance": lambda s: dict(f=s[0], a=s[1]),
             "headbang": lambda s: dict(f=s[0], a=s[1]), "twist": lambda s: dict(f=s[0], a=s[1])}
+
+# v9x: 7 new test sources per type (test only) and their spares; values differ from every train / val / test / spare
+# source above (checked at build), mostly inside the range the train clips actually cover (a failed train source does
+# not count: side_step trains only +dy 1.25-1.75 cm, turn_in_place |dth| 0.15-0.175, walk_turn dx 2-3 cm)
+GAITS_X = {
+    "walk_fwd": dict(test=[("0.0225", "0", "0"), ("0.024", "0", "0"), ("0.029", "0", "0"), ("0.031", "0", "0"),
+                           ("0.034", "0", "0"), ("0.0365", "0", "0"), ("0.039", "0", "0")],
+                     spare=[("0.0215", "0", "0"), ("0.0345", "0", "0"), ("0.038", "0", "0"), ("0.0425", "0", "0")]),
+    "walk_back": dict(test=[("-0.021", "0", "0"), ("-0.024", "0", "0"), ("-0.026", "0", "0"), ("-0.029", "0", "0"),
+                            ("-0.031", "0", "0"), ("-0.034", "0", "0"), ("-0.039", "0", "0")],
+                      spare=[("-0.036", "0", "0"), ("-0.0385", "0", "0"), ("-0.0215", "0", "0")]),
+    "side_step": dict(test=[("0", "0.0135", "0"), ("0", "0.0145", "0"), ("0", "0.016", "0"), ("0", "0.019", "0"),
+                            ("0", "-0.0135", "0"), ("0", "-0.0155", "0"), ("0", "-0.019", "0")],
+                      spare=[("0", "0.0165", "0"), ("0", "-0.0145", "0"), ("0", "0.021", "0"), ("0", "-0.0165", "0"),
+                             ("0", "0.0115", "0"), ("0", "-0.0115", "0"), ("0", "-0.021", "0")]),
+    "turn_in_place": dict(test=[("0", "0", "0.14"), ("0", "0", "-0.14"), ("0", "0", "0.16"), ("0", "0", "-0.16"),
+                                ("0", "0", "0.19"), ("0", "0", "-0.19"), ("0", "0", "-0.125")],
+                          spare=[("0", "0", "0.13"), ("0", "0", "-0.13"), ("0", "0", "0.165"), ("0", "0", "-0.165"),
+                                 ("0", "0", "0.21"), ("0", "0", "-0.21")]),
+    "walk_turn": dict(test=[("0.025", "0", "-0.10"), ("0.02", "0", "-0.12"), ("0.03", "0", "-0.13"), ("0.0275", "0", "-0.06"),
+                            ("0.0225", "0", "0.05"), ("0.02", "0", "0.07"), ("0.03", "0", "0.06")],
+                      spare=[("0.0225", "0", "-0.14"), ("0.0275", "0", "0.09"), ("0.025", "0", "-0.14"), ("0.02", "0", "-0.08"),
+                             ("0.03", "0", "-0.08"), ("0.0225", "0", "0.12")]),
+}
+MARCH_X = dict(test=["0.016", "0.0215", "0.024"], spare=["0.019", "0.0135", "0.0265"])
+LEG_WILD_X = dict(test=[("stomp", dict(lift=0.0175, period=1.5, dy=DY)), ("kick", dict(r=0.035, tau=0.4, dy=DY)),
+                        ("tap", dict(reach=0.025, period=1.4, dy=DY)), ("kick", dict(r=0.025, tau=0.45, dy=DY))],
+                  spare=[("stomp", dict(lift=0.0125, period=1.4, dy=DY)), ("tap", dict(reach=0.0325, period=1.5, dy=DY)),
+                         ("kick", dict(r=0.0325, tau=0.5, dy=DY)), ("stomp", dict(lift=0.0225, period=1.6, dy=DY))])
+STAT_X = {  # variants complete the v9 test list to 6 / 6
+    "crouch": dict(test=[(0.25, "fast"), (0.33, "slow"), (0.42, "fast"), (0.58, "slow"), (0.7, "fast"), (0.8, "slow"),
+                         (0.95, "fast")], spare=[(0.27, "slow"), (0.48, "fast"), (0.68, "slow")]),
+    "bow": dict(test=[(11, "fast"), (16, "slow"), (19, "fast"), (12.5, "slow"), (14.5, "fast"), (20.5, "slow"), (23.5, "fast")],
+                spare=[(16.5, "slow"), (21.5, "fast"), (10.5, "slow")]),
+    "sway": dict(test=[(0.011, "f1.0"), (0.0145, "f0.5"), (0.016, "f1.0"), (0.019, "f0.5"), (0.0215, "f1.0"), (0.024, "f0.5"),
+                       (0.0285, "f1.0")], spare=[(0.0265, "f0.5"), (0.012, "f1.0"), (0.0185, "f1.0")]),
+    "head": dict(test=[(("nod", 0.9), "fast"), (("shake", 0.9), "slow"), (("tilt", 0.9), "slow"), (("look_around", 0.9), "fast"),
+                       (("nod_tilt", 0.8), "slow"), (("look_tilt", 0.8), "fast"), (("shake", 0.75), "slow")],
+                 spare=[(("tilt", 0.75), "fast"), (("nod", 0.75), "slow"), (("look_around", 0.7), "slow")]),
+}
+WILD_X = {
+    "hop": dict(test=[(0.0042, 1), (0.0048, 2), (0.0052, 2), (0.0058, 1), (0.0068, 2), (0.0072, 1), (0.0082, 2)],
+                spare=[(0.0078, 1), (0.0062, 1), (0.0088, 2), (0.0054, 1)]),
+    "dance": dict(test=[(1.1, 0.55), (1.4, 0.65), (1.6, 0.55), (1.9, 0.7), (2.1, 0.55), (2.4, 0.6), (1.3, 0.75)],
+                  spare=[(1.6, 0.7), (2.2, 0.6), (1.8, 0.5), (1.2, 0.65)]),
+    "headbang": dict(test=[(1.25, 0.3), (1.75, 0.4), (2.25, 0.25), (1.25, 0.45), (2.75, 0.25), (1.75, 0.3), (2.25, 0.4)],
+                     spare=[(1.5, 0.45), (2.5, 0.25), (1.25, 0.2), (2, 0.4)]),
+    "twist": dict(test=[(0.6, 0.2), (0.9, 0.15), (1.1, 0.25), (1.4, 0.25), (0.8, 0.3), (1.2, 0.2), (0.7, 0.175)],
+                  spare=[(0.9, 0.25), (1.1, 0.175), (1.4, 0.15), (0.6, 0.3)]),
+}
 # broken copies: (type, kind, options); ~3 per kind, spread across types, 25 in total
 BROKEN = [("walk_fwd", "shove", dict(dx=-0.07)), ("walk_fwd", "noise", {}),
           ("walk_back", "shove", dict(dx=-0.07)), ("walk_back", "glitch", {}),
@@ -156,13 +215,30 @@ def gait_name(cat, src, style):
     return f"{cat}__dx{dx}_dy{dy}_dth{dth}__{style}"
 
 
-def write_presets(gen, out):
-    """Placo presets for every gait source (both styles), then run the generator (as gen_gaits.sh)."""
+def stat_sid(cat, s):
+    return (f"crouch__depth{s:.2f}" if cat == "crouch" else f"bow__pitch{s}deg" if cat == "bow"
+            else f"sway__amp{s:.4f}m" if cat == "sway" else f"head__{s[0]}_a{s[1]:g}")
+
+
+def listed_sources(gaits, march, leg_wild, stat, wild, clip_id):
+    """Every source id a set of tables names (all splits and spares), as a list (duplicates kept)."""
+    out = [gait_name(c, s, "x").rsplit("__", 1)[0] for c, sp in gaits.items() for k in sp for s in sp[k]]
+    out += [gait_name("march", s, "x").rsplit("__", 1)[0] for k in march for s in march[k]]
+    out += [clip_id(f, p) for k in leg_wild for f, p in leg_wild[k]]
+    out += [stat_sid(c, s) for c, sp in stat.items() for s in sp.get("train", [])]
+    out += [stat_sid(c, s) for c, sp in stat.items() for k in sp if k != "train" for s, _ in sp[k]]
+    out += [clip_id(f, WILD_PRM[f](s)) for f, sp in wild.items() for k in sp for s in sp[k]]
+    return out
+
+
+def write_presets(gen, out, ext=False):
+    """Placo presets for every gait source (both styles), then run the generator (as gen_gaits.sh); ext: v9x sources only."""
     os.makedirs(os.path.join(out, "presets"), exist_ok=True)
     base = json.load(open(os.path.join(gen, "open_duck_reference_motion_generator/robots/open_duck_mini_v2/placo_presets/medium.json")))
     names = []
-    jobs = [(cat, s) for cat, sp in GAITS.items() for k in ("train", "val", "test", "spare") for s in sp[k]]
-    jobs += [("march", s) for k in ("train", "val", "test", "spare") for s in MARCH[k]]
+    G, MA = (GAITS_X, MARCH_X) if ext else (GAITS, MARCH)
+    jobs = [(cat, s) for cat, sp in G.items() for k in ("train", "val", "test", "spare") for s in sp.get(k, [])]
+    jobs += [("march", s) for k in ("train", "val", "test", "spare") for s in MA.get(k, [])]
     for cat, src in jobs:
         for sty, (ss, fh, sst) in STYLE_PRM.items():
             b = dict(base)
@@ -276,13 +352,23 @@ def build_library(a):
         clips.append((e, (q, pos, quat, con)))
         return True
 
-    # ---- clean clips
+    # ---- clean clips (v9x: only the new test sources, whose gait styles continue the v9 test list's alternation)
+    ext = bool(a.extend_test)
+    G, MA, LW, ST, WI = (GAITS_X, MARCH_X, LEG_WILD_X, STAT_X, WILD_X) if ext else (GAITS, MARCH, LEG_WILD, STAT, WILD)
+    if ext:
+        v9man = json.load(open(os.path.join(a.extend_test, "manifest.json")))
+        assert max_drop == v9man["max_crouch_drop_m"], (max_drop, v9man["max_crouch_drop_m"])
+        v9_src = set(listed_sources(GAITS, MARCH, LEG_WILD, STAT, WILD, clip_id)) | {c["source"] for c in v9man["clips"]}
+        x_src = listed_sources(G, MA, LW, ST, WI, clip_id)
+        assert len(set(x_src)) == len(x_src), "a v9x source is listed twice"
+        assert not v9_src & set(x_src), sorted(v9_src & set(x_src))
     for cat in GAIT_TYPES + ["march"]:
-        spec = GAITS.get(cat) if cat != "march" else MARCH
+        spec = G.get(cat) if cat != "march" else MA
         tcat = "leg_lift" if cat == "march" else cat
         spares = list(spec["spare"])
+        j0 = len((GAITS.get(cat) or MARCH)["test"]) if ext else 0
         for split in ("train", "val", "test"):
-            for j, src in enumerate(spec[split]):
+            for j, src in enumerate(spec.get(split, []), j0 if split == "test" else 0):
                 while True:
                     sid = gait_name(cat, src, "x").rsplit("__", 1)[0]
                     styles = ("normal", "gentle") if split == "train" else (("normal", "gentle")[j % 2], ("gentle", "normal")[j % 2])
@@ -302,32 +388,34 @@ def build_library(a):
                         break
                     src = spares.pop(0)
     for split in ("train", "val", "test"):
-        spares = list(LEG_WILD["spare"])
-        for fam, prm in LEG_WILD[split]:
+        spares = list(LW["spare"])
+        for fam, prm in LW.get(split, []):
             while not add("leg_lift", clip_id(fam, prm), clip_id(fam, prm), split, wild(fam, prm), "keyframed", {"family": fam}):
                 notes.append(f"{clip_id(fam, prm)} ({split}) not clean; replaced by a spare")
                 fam, prm = spares.pop(0)
-    for cat, spec in STAT.items():
+    for cat, spec in ST.items():
         spares = list(spec["spare"])
-        sid_of = lambda s: (f"crouch__depth{s:.2f}" if cat == "crouch" else f"bow__pitch{s}deg" if cat == "bow"  # noqa: E731
-                            else f"sway__amp{s:.4f}m" if cat == "sway" else f"head__{s[0]}_a{s[1]:g}")
-        for src in spec["train"]:
+        sid_of = lambda s: stat_sid(cat, s)  # noqa: E731
+        for src in spec.get("train", []):
             for v in STAT_VARIANTS[cat]:
                 if not add(cat, f"{sid_of(src)}__{v}", sid_of(src), "train", stat(cat, src, v), "ik"):
                     notes.append(f"{sid_of(src)}__{v} (train) failed the checks")
         for split in ("val", "test"):
-            for src, v in spec[split]:
+            for src, v in spec.get(split, []):
                 while not add(cat, f"{sid_of(src)}__{v}", sid_of(src), split, stat(cat, src, v), "ik"):
                     notes.append(f"{sid_of(src)}__{v} ({split}) failed the checks; replaced by a spare")
                     src, v = spares.pop(0)
-    for fam, spec in WILD.items():
+    for fam, spec in WI.items():
         spares = list(spec["spare"])
         for split in ("train", "val", "test"):
-            for s in spec[split]:
+            for s in spec.get(split, []):
                 while not add(fam, clip_id(fam, WILD_PRM[fam](s)), clip_id(fam, WILD_PRM[fam](s)), split,
                               wild(fam, WILD_PRM[fam](s)), "keyframed"):
                     notes.append(f"{clip_id(fam, WILD_PRM[fam](s))} ({split}) not clean; replaced by a spare")
                     s = spares.pop(0)
+    if ext:
+        return write_extended(a, clips, notes, m, d, qadr, T, {"rate_lag_rad": round(LAG_BAR, 3), "zmp_min_margin_mm": round(ZMP_BAR, 1),
+                                                              "n_gait_clips": len(lags)})
 
     # ---- broken copies
     sites = [m.site("left_foot").id, m.site("right_foot").id]
@@ -626,6 +714,35 @@ def build_library(a):
     print(f"{a.out}: {len(allc)} clips")
 
 
+def write_extended(a, clips, notes, m, d, qadr, T, bars):
+    """v9x: the clips_v9 library unchanged (same rows, ids, indices) with the new clean test clips appended."""
+    from make_infeasible import arrays
+    v9 = np.load(os.path.join(a.extend_test, "library.npz"))
+    man = json.load(open(os.path.join(a.extend_test, "manifest.json")))
+    assert bars == man["bars_from_v7_walking"], (bars, man["bars_from_v7_walking"])
+    N = len(man["clips"])
+    new = {k: np.zeros((len(clips),) + v9[k].shape[1:], dtype=v9[k].dtype) for k in v9.files if k != "length"}
+    man_new = []
+    for j, (e, (q, pos, quat, con)) in enumerate(clips):
+        assert e["split"] == "test" and len(q) <= T, e["id"]
+        if e.get("family") is None:
+            e.pop("family", None)
+        for k_, x in arrays(m, d, qadr, q, pos, quat, con).items():
+            new[k_][j, :len(x)] = x
+            new[k_][j, len(x):] = x[-1]
+        man_new.append(dict(e, index=N + j, new_in="v9x"))
+    lib = {k: np.concatenate([v9[k], new[k]]) for k in new}
+    lib["length"] = np.concatenate([v9["length"], np.array([e["length"] for e, _ in clips], dtype=v9["length"].dtype)])
+    os.makedirs(a.out, exist_ok=True)
+    np.savez_compressed(os.path.join(a.out, "library.npz"), **lib)
+    manifest = dict(man, version="v9x", extended_from=os.path.basename(os.path.normpath(a.extend_test)),
+                    split=man["split"] + "; v9x appends 7 test sources per type (make_v9.py --extend-test)",
+                    notes=man["notes"] + [f"v9x: {x}" for x in notes], clips=man["clips"] + man_new)
+    json.dump(manifest, open(os.path.join(a.out, "manifest.json"), "w"), indent=1, default=float)
+    print("\n".join(notes))
+    print(f"{a.out}: {N} clips from {a.extend_test} + {len(clips)} new test clips")
+
+
 # ----------------------------------------------------------------------------------------------- verify and doc
 def verify(lib_dir):
     lib = np.load(os.path.join(lib_dir, "library.npz"))
@@ -665,6 +782,27 @@ def verify(lib_dir):
     ntr = sum(1 for c in cl if c["split"] == "train")
     print(f"verify OK: {N} clips, train {ntr} ({nb} broken = {100 * nb / ntr:.1f}%), every joint moves in clean train, "
           "no source in two splits")
+    if man.get("extended_from"):  # v9x: every base clip unchanged (manifest entry and every array, bit for bit)
+        base_dir = os.path.join(os.path.dirname(os.path.normpath(lib_dir)), man["extended_from"])
+        blib = np.load(os.path.join(base_dir, "library.npz"))
+        bcl = json.load(open(os.path.join(base_dir, "manifest.json")))["clips"]
+        assert sorted(blib.files) == sorted(lib.files), (blib.files, lib.files)
+        nb_ = len(bcl)
+        assert cl[:nb_] == bcl, "a base manifest entry changed"
+        for k in lib.files:
+            assert lib[k].dtype == blib[k].dtype and lib[k][:nb_].tobytes() == blib[k].tobytes(), k
+        xs = cl[nb_:]
+        assert all(c["split"] == "test" and c.get("new_in") == "v9x" and c["check"]["pass"] for c in xs)
+        bars = man["bars_from_v7_walking"]
+        for c in xs:
+            if c["generator"] == "keyframed":
+                y = c["dynamic"]
+                assert y["rate_lag_rad"] <= bars["rate_lag_rad"] + 5e-4 and y["zmp_min_margin_mm"] >= bars["zmp_min_margin_mm"] - 0.05 \
+                    and not y["takeoff_fail"], c["id"]
+        sp = {c["source"] for c in bcl}
+        assert not sp & {c["source"] for c in xs}
+        print(f"  {man['extended_from']}: {nb_} clips identical (manifest + {len(lib.files)} arrays, bit for bit); "
+              f"{len(xs)} new test clips, all pass the clean checks, no source shared with {man['extended_from']}")
 
 
 def describe(c):
@@ -717,22 +855,48 @@ def write_doc(lib_dir, out):
     kinds = collections.Counter((c["feasibility"]["family"], c["contaminant"]) for c in br)
     brow = [f"| `{c['id']}` | {c['category']} | {c['feasibility']['family']} | {c['contaminant']} | {evidence(c)} |"
             for c in sorted(br, key=lambda c: (c["feasibility"]["family"] != "impossible", c["contaminant"], c["category"]))]
-    crow = [f"| `{c['id']}` | {c['category']} | {c['split']} | {describe(c)} | {c['check']['peak_joint_speed_rad_s']:.1f} |"
+    crow = [f"| `{c['id']}` | {c['category']} | {c['split']}{' (' + c['new_in'] + ')' if c.get('new_in') else ''} | {describe(c)} | "
+            f"{c['check']['peak_joint_speed_rad_s']:.1f} |"
             for t in man["types"] for c in sorted((c for c in cl if c["category"] == t and not c.get("contaminant")),
                                                     key=lambda c: (("train", "val", "test").index(c["split"]), c["id"]))]
     ntr = sum(c["split"] == "train" for c in cl)
     b = man["bars_from_v7_walking"]
-    doc = f"""# Reference-clip dataset v9
+    name, base = os.path.basename(os.path.normpath(lib_dir)), man.get("extended_from")
+    xs = [c for c in cl if c.get("new_in")]
+    ntest = collections.Counter(c["category"] for c in cl if c["split"] == "test")
+    per_test = f"{min(ntest.values())}" if min(ntest.values()) == max(ntest.values()) else "5-12"
+    gifs = ("GIFs of every clip, labelled\nwith split and broken kind: [`results/clips_v9/gifs/`](../results/clips_v9/gifs/README.md)."
+            if not base else f"GIFs of the {base} clips (the\nnew test clips have none yet): [`results/clips_v9/gifs/`](../results/clips_v9/gifs/README.md).")
+    ext_txt = "" if not base else (
+        f"""- **Extension of `data/{base}`:** every {base} clip is copied unchanged (same id, index and arrays, checked
+  bit for bit by `--verify`); {len(xs)} new clean test clips are appended, marked `"new_in": "{man['version']}"`, 7 per type, one
+  variant per new source (sources listed in `GAITS_X` ... `WILD_X` of `make_v9.py`, none equal to any {base} train /
+  val / test / spare source). Train and val are exactly {base}'s.
+""")
+    xrow = [f"| `{c['id']}` | {c['category']} | {describe(c)} | {c['check']['joint_limit_margin_rad']:.3f} | "
+            f"{c['check']['peak_joint_speed_rad_s']:.1f} | {c['dynamic']['rate_lag_rad']:.3f} | {c['dynamic']['zmp_min_margin_mm']:.1f} | "
+            f"{'pass' if c['check']['pass'] else 'FAIL'} |" for t in man["types"] for c in xs if c["category"] == t]
+    xsec = "" if not xs else f"""
+## New test clips ({man['version']})
 
-Built by `curation/clips/make_v9.py`; this file is written from `data/clips_v9/manifest.json`
-(`python3 curation/clips/make_v9.py --verify data/clips_v9 --doc docs/DATASET_V9.md`). GIFs of every clip, labelled
-with split and broken kind: [`results/clips_v9/gifs/`](../results/clips_v9/gifs/README.md).
+Each passes `make_library.check_clip`; keyframed clips also pass the servo-lag / balance bars above (and hops the
+take-off check). Servo lag and balance margin are `dynamic_check.py`'s reference-only measures (shown for every clip;
+the bars apply to keyframed clips only, as in {base}).
+
+| clip | type | parameters | joint-limit margin (rad) | peak joint speed (rad/s) | servo lag (rad) | balance margin (mm) | check |
+|---|---|---|---|---|---|---|---|
+{chr(10).join(xrow)}
+"""
+    doc = f"""# Reference-clip dataset {man['version']}
+
+Built by `curation/clips/make_v9.py`; this file is written from `data/{name}/manifest.json`
+(`python3 curation/clips/make_v9.py --verify data/{name} --doc docs/{os.path.basename(out)}`). {gifs}
 
 ## Contents
 
 - **{len(cl)} clips**, 50 Hz, at most 4 s. Train / val / test: **{ntr} / {sum(c['split'] == 'val' for c in cl)} /
   {sum(c['split'] == 'test' for c in cl)}**; {len(br)} of the train clips are broken copies ({100 * len(br) / ntr:.1f}% of train).
-- 14 motion types. Clean clips per type: 6 train, 3 val, 5 test, split by source (a source's clips are all in one
+{ext_txt}- 14 motion types. Clean clips per type: 6 train, 3 val, {per_test} test, split by source (a source's clips are all in one
   split); val / test sources are parameter values no train clip has, mostly inside the train range.
 - Splits are fixed by design in `make_v9.py` (no random draw). Every actuated joint moves in the clean train clips.
 - `leg_lift` merges march (Placo gaits) with keyframed stomp, kick and tap (weight shifted {100 * man['keyframed_weight_shift_m']:.1f} cm).
@@ -743,7 +907,7 @@ with split and broken kind: [`results/clips_v9/gifs/`](../results/clips_v9/gifs/
 | type | train clean | train broken | val | test |
 |---|---|---|---|---|
 {chr(10).join(rows)}
-
+{xsec}
 ## Broken clips
 
 Each is a copy of a clean train clip of the same type (`derived_from`), in the train split only.
@@ -786,9 +950,10 @@ def main():
     p.add_argument("--out")
     p.add_argument("--verify")
     p.add_argument("--doc")
+    p.add_argument("--extend-test", metavar="V9_DIR", help="v9x: keep this library and append the new test sources")
     a = p.parse_args()
     if a.presets:
-        write_presets(*a.presets)
+        write_presets(*a.presets, ext=bool(a.extend_test))
     elif a.verify:
         verify(a.verify)
         if a.doc:
