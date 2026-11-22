@@ -115,3 +115,32 @@ run; pushes 0.3 / 0.6 m/s and friction × 0.6 at 55% and full; 10 rollouts per c
   v9 must produce a test evaluation. Phase 2 learners in order PPO without feed-forward, SAC, DAgger, ARS, FastTD3.
   `phase2_analysis.py` uses curatedtn as the reference condition when there is no oracle (P4: full − curatedtn gap vs
   PPO's).
+- 2026-11-22, Phase 2 stopped and redesigned before any Phase 2 analysis (owner's decision). After 18 of 75 runs the
+  comparison was not fair to the learners: only PPO had the reference feed-forward switched deliberately, brax SAC ran
+  with the feed-forward (no override), a critic without the privileged state, 128 envs, batch 512 and an entropy
+  weight starting at 1, and no learner but PPO had any tuning. PPO without feed-forward (e ≈ 1.55) and SAC (e ≈ 1.96)
+  were far from PPO (0.37), so no curation effect could show. The 18 runs (`results/cv9/phase2/`) are reported as the
+  stopped design, not as Phase 2 results. **Phase 2 v2:**
+  - **One contract for every learner:** the Phase 1 env, reward, randomization, clip lists and feed-forward action
+    (q_ref(t+1) + 0.25 a); actor sees `state`; every learner with a critic gets the privileged critic
+    (`privileged_state`). PPO without feed-forward stays, reported as an action-space ablation, not as a learner.
+  - **Learners:** PPO, FastTD3, FastSAC (Holosoma's implementation and its whole-body-tracking recipe, replacing brax
+    SAC), ARS, DAgger. DAgger is reported as distillation of the same-condition PPO teacher (teacher cost excluded,
+    as before); its ceiling is the teacher.
+  - **Equal tuning budget:** every learner, PPO included, gets 4 configurations fixed in advance (its published
+    defaults plus 3 variants, listed in `results/cv9/phase2v2/tuning.json` before the tuning runs), trained once on
+    full, seed 0, at the budget; the configuration with the lowest val e (10 rollouts, original score) is used.
+    PPO's Phase 1 configuration is one of its 4; if another wins, PPO's Phase 2 row is rerun with it.
+  - **Budget:** equal wall-clock (1.552 h, as before); env steps and gradient updates are reported for every run.
+    A learner that fails the gate gets one run at 4x the budget (full, seed 0) to show whether it is budget-bound.
+  - **Competence gate (val, before any curation run):** val e(full) ≤ 2 × PPO's val e(full) and val fall rate ≤ 0.2.
+    Learners that pass run full, curated, curatedtn, kinematic, random at f* = 65%, seeds 0-2; those that fail are
+    reported as "not competent at this budget" with no curation runs.
+  - **Analysis:** within-learner paired differences vs full with 97.5% source-level CIs, the Phase 1 drop rule, on
+    the test set of the next item.
+- 2026-11-22, measurement additions (owner's decision), applied to Phase 1's existing checkpoints and to every later
+  run: (1) the test set grows to about 12 clean clips per type (`data/clips_v9x`, same rules as §1; train and val
+  unchanged; the original 70 clips stay and are also reported alone, so the confirmatory H1 / H2 result on the 70
+  clips is unchanged and the larger set is secondary); (2) `eval_clips.py` adds fall-free tracking error
+  (`score_alive`), action rate, foot slip and base-height error, and a `--dr` evaluation under the training
+  randomization; nominal and DR evaluations of every Phase 1 checkpoint on the larger test set are secondary results.

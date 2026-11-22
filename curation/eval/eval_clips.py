@@ -19,9 +19,19 @@ delay) with a trained checkpoint, deterministic actions, every requested clip fr
                pitch, heading-free). Joints and body-frame keypoints are blind to it: tipping onto a foot the clip holds
                up keeps every joint on target.
   score_v3     score_v2 plus tilt_err / tau_tilt per frame, same fall rule (judging only)
+  score_alive  legs_rms / tau_dof + keypoints / tau_key over the frames played only: tracking quality with the falls
+               taken out (the falls are in completion / falls)
+  action_rate  mean over the frames played of sum((a_t - a_{t-1})^2) of the policy action (training cost term, unscaled)
+  foot_slip    mean over the frames played of the summed squared xy speed (m^2/s^2) of the feet in contact (training
+               cost term, unscaled)
+  height_err (m): mean over the frames played of |base height - reference base height|; joints, body-frame keypoints
+               and tilt are blind to it (a hop that never leaves the floor keeps them all on target)
 
   cd Open_Duck_Playground && .venv/bin/python ../open-duck-curation/curation/eval/eval_clips.py \
-      --ckpt <run>/<checkpoint dir> --clips all|train|val|test|<ids.json> --rollouts 10 --out scores.json
+      --ckpt <run>/<checkpoint dir> --clips all|train|val|test|<ids.json> --rollouts 10 --out scores.json [--dr]
+
+--dr runs every rollout under the training domain randomization (tracking.make_randomizer: friction, floor surface,
+masses, torso CoM, joint offsets and gains), one random model per rollout.
 """
 
 import argparse
@@ -104,9 +114,9 @@ def gravity_body(q):
     return -jp.stack([2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)], -1)
 
 
-def evaluate(ckpt, ids, rollouts, seed=0, push=0.0, friction=1.0):
+def evaluate(ckpt, ids, rollouts, seed=0, push=0.0, friction=1.0, dr=False):
     """push: lateral base-velocity kick (m/s) at t = PUSH_T, +y on even rollouts and -y on odd ones (P.7);
-    friction: scale on every geom's friction."""
+    friction: scale on every geom's friction; dr: one training-randomized model per rollout."""
     env = tracking.Tracking(clip_ids=ids)
     if friction != 1.0:
         env._mjx_model = env._mjx_model.replace(geom_friction=env._mjx_model.geom_friction.at[:, 0].multiply(friction))
@@ -114,7 +124,25 @@ def evaluate(ckpt, ids, rollouts, seed=0, push=0.0, friction=1.0):
     n = len(ids)
     clips = jp.repeat(jp.arange(n), rollouts)
     keys = jax.random.split(jax.random.PRNGKey(seed), n * rollouts)
-    reset = jax.jit(jax.vmap(lambda k, c: env.reset_to(k, c, 0)))
+    if dr:  # as mujoco_playground's BraxDomainRandomizationVmapWrapper, with reset_to instead of reset
+        base = env._mjx_model
+        dr_keys = jax.random.split(jax.random.PRNGKey(seed + 2), n * rollouts)
+        model_v, in_axes = tracking.make_randomizer(env.mj_model)(base, rng=dr_keys)
+
+        def in_model(mm, f, *x):
+            env._mjx_model = mm
+            try:
+                return f(*x)
+            finally:
+                env._mjx_model = base
+
+        reset = jax.jit(lambda k, c: jax.vmap(lambda mm, k, c: in_model(mm, env.reset_to, k, c, 0),
+                                              in_axes=[in_axes, 0, 0])(model_v, k, c))
+        vstep = lambda st, a: jax.vmap(lambda mm, s, a: in_model(mm, env.step, s, a),  # noqa: E731
+                                       in_axes=[in_axes, 0, 0])(model_v, st, a)
+    else:
+        reset = jax.jit(jax.vmap(lambda k, c: env.reset_to(k, c, 0)))
+        vstep = jax.vmap(env.step)
     T = env._T
 
     m = env._mj_model
@@ -130,10 +158,13 @@ def evaluate(ckpt, ids, rollouts, seed=0, push=0.0, friction=1.0):
         st = st.replace(data=st.data.replace(qvel=qvel))
         key, kp = jax.random.split(key)
         act, _ = jax.vmap(policy)(st.obs, jax.random.split(kp, st.obs["state"].shape[0]))
-        nst = jax.vmap(env.step)(st, act)
+        nst = vstep(st, act)
         q = jax.vmap(env.get_actuator_joints_qpos)(nst.data.qpos)
         rec = {k: nst.metrics[k] for k in ("err/legs_rms", "err/head_rms", "err/keypoints", "err/lin_vel", "err/yaw_rate")}
         rec["fell"] = nst.metrics["cost/termination"]
+        rec["action_rate"] = nst.metrics["cost/action_rate"]
+        rec["foot_slip"] = nst.metrics["cost/foot_slip"]
+        rec["z"] = nst.data.qpos[:, 2]
         rec["torque_sat"] = jp.any(jp.abs(nst.data.actuator_force) >= 0.95 * fmax, axis=-1).astype(jp.float32)
         rec["joint_lim"] = jp.any((q < lo + 0.02) | (q > hi - 0.02), axis=-1).astype(jp.float32)
         rec["alive"] = alive
@@ -148,6 +179,7 @@ def evaluate(ckpt, ids, rollouts, seed=0, push=0.0, friction=1.0):
     ref_xy = np.asarray(env._ref_pos[..., :2])  # (clips, frames, 2)
     ref_yaw = np.unwrap(np.asarray(yaw_of(env._ref_quat)), axis=1)
     ref_grav = np.asarray(gravity_body(env._ref_quat))
+    ref_z = np.asarray(env._ref_pos[..., 2])
     run = jax.jit(lambda st: jax.lax.scan(one_step, (st, jp.ones(n * rollouts), jax.random.PRNGKey(seed + 1)), jp.arange(T - 1))[1])
     rec = jax.tree_util.tree_map(np.asarray, run(st))  # (T-1, n*R)
     L = np.asarray(env._ref_len)[np.asarray(clips)] - 1
@@ -169,6 +201,11 @@ def evaluate(ckpt, ids, rollouts, seed=0, push=0.0, friction=1.0):
             e_pos = np.linalg.norm(rec["xy"][:Lr, r] - want, axis=-1)
             e_yaw = np.abs(np.angle(np.exp(1j * (rec["yaw"][:Lr, r] - ref_yaw[ci, 1:Lr + 1] - rot))))
             e_tilt = np.arccos(np.clip(np.sum(rec["grav"][:Lr, r] * ref_grav[ci, 1:Lr + 1], -1), -1.0, 1.0))
+            e_h = np.abs(rec["z"][:Lr, r] - ref_z[ci, 1:Lr + 1])
+            nan = float("nan")
+            extra = dict(score_alive=float(e[alive].mean()) if played else nan,
+                         height_err=float(e_h[alive].mean()) if played else nan,
+                         **{k: float(rec[k][:Lr, r][alive].mean()) if played else nan for k in ("action_rate", "foot_slip")})
             e2 = e + e_pos / TAU_POS + e_yaw / TAU_YAW
             e3 = e2 + e_tilt / TAU_TILT
             e, e2, e3 = (np.where(alive, x, E_FAIL) for x in (e, e2, e3))
@@ -182,7 +219,7 @@ def evaluate(ckpt, ids, rollouts, seed=0, push=0.0, friction=1.0):
                             **{k.split("/")[-1]: float(rec[k][:Lr, r][alive].mean()) if played else float("nan")
                                for k in ("err/legs_rms", "err/head_rms", "err/keypoints", "err/lin_vel", "err/yaw_rate")},
                             torque_sat=float(rec["torque_sat"][:Lr, r][alive].mean()) if played else float("nan"),
-                            joint_lim=float(rec["joint_lim"][:Lr, r][alive].mean()) if played else float("nan")))
+                            joint_lim=float(rec["joint_lim"][:Lr, r][alive].mean()) if played else float("nan"), **extra))
         agg = {k: float(np.nanmean([p[k] for p in per])) for k in per[0] if k != "fell"}
         agg["falls"] = int(sum(p["fell"] for p in per))
         agg["rollouts"] = len(per)
@@ -198,6 +235,7 @@ def main():
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--push", type=float, default=0.0, help="lateral kick (m/s) at t = 1.5 s (P.7)")
     p.add_argument("--friction", type=float, default=1.0, help="friction scale (P.7: 0.6)")
+    p.add_argument("--dr", action="store_true", help="training domain randomization, one model per rollout")
     p.add_argument("--out", required=True)
     a = p.parse_args()
     meta = learner_meta(a.ckpt)
@@ -205,7 +243,7 @@ def main():
         os.environ["TRACKING_OVERRIDES"] = json.dumps(meta["tracking_overrides"])
     _, man = tracking.load_library()
     ids = clip_ids(man, a.clips)
-    res = evaluate(a.ckpt, ids, a.rollouts, a.seed, a.push, a.friction)
+    res = evaluate(a.ckpt, ids, a.rollouts, a.seed, a.push, a.friction, a.dr)
     cat = {c["id"]: (c["category"], c["split"]) for c in man["clips"]}
     print(f"{'clip':52s} {'split':5s} {'compl':>6s} {'falls':>5s} {'legs':>6s} {'kp cm':>6s} {'vel':>6s} {'yaw':>6s} {'pos cm':>6s} {'hdg':>6s} {'tilt':>6s} {'score':>6s} {'v2':>6s} {'v3':>6s}")
     for cid, r in sorted(res.items(), key=lambda kv: kv[1]["score"]):
@@ -214,7 +252,7 @@ def main():
               f"{100 * r['pos_err']:6.2f} {r['yaw_err']:6.3f} {r['tilt_err']:6.3f} {r['score']:6.2f} {r['score_v2']:6.2f} {r['score_v3']:6.2f}")
     json.dump({"ckpt": "/".join(os.path.abspath(a.ckpt).split("/")[-2:]), "tau_dof": TAU_DOF, "tau_key": TAU_KEY, "e_fail": E_FAIL,
                "tau_pos": TAU_POS, "tau_yaw": TAU_YAW, "tau_tilt": TAU_TILT,
-               "rollouts": a.rollouts, "push_m_s": a.push, "friction_scale": a.friction, "clips": res}, open(a.out, "w"), indent=1)
+               "rollouts": a.rollouts, "push_m_s": a.push, "friction_scale": a.friction, "dr": a.dr, "clips": res}, open(a.out, "w"), indent=1)
     print("wrote", a.out)
 
 
