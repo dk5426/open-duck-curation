@@ -143,8 +143,8 @@ class Scheduler:
                 if job["on_done"]:
                     job["on_done"](job["name"], g)
                 continue
-            env = dict(os.environ, CURATION_LIBRARY=a.lib, PPO_OVERRIDES_JSON=json.dumps({"seed": job["seed"]}),
-                       **job.get("env", {}))
+            env = dict(os.environ, CURATION_LIBRARY=a.lib, PPO_OVERRIDES_JSON=json.dumps({"seed": job["seed"]}))
+            env.update(job.get("env", {}))  # may replace PPO_OVERRIDES_JSON (Phase 2 v2 tuning)
             if job["clips"]:
                 env["CURATION_CLIPS"] = job["clips"]
             args = [LAUNCH, str(g), job["name"], str(job["steps"]), "--env", "tracking"]
