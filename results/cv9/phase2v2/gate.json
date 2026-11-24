@@ -1,0 +1,125 @@
+{
+ "rule": "val e <= 2.0 x PPO's best val e (0.400) and val fall rate <= 0.2",
+ "learners": {
+  "ppo": {
+   "configs": {
+    "base": {
+     "val_e": 0.40239677411459746,
+     "val_fall_rate": 0.09523809523809523
+    },
+    "lr_div3": {
+     "val_e": 0.4188288441193955,
+     "val_fall_rate": 0.09523809523809523
+    },
+    "lr_x3": {
+     "val_e": 0.40016817691780265,
+     "val_fall_rate": 0.07857142857142857
+    },
+    "gamma099": {
+     "val_e": 0.43101367526465933,
+     "val_fall_rate": 0.09523809523809523
+    }
+   },
+   "best": "lr_x3",
+   "val_e": 0.40016817691780265,
+   "val_fall_rate": 0.07857142857142857,
+   "competent": true
+  },
+  "fasttd3": {
+   "configs": {
+    "base": {
+     "val_e": 0.44985573898468706,
+     "val_fall_rate": 0.02857142857142857
+    },
+    "lr_div3": {
+     "val_e": 0.4632259857441697,
+     "val_fall_rate": 0.0380952380952381
+    },
+    "lr_x3": {
+     "val_e": 0.4714098929826703,
+     "val_fall_rate": 0.06666666666666667
+    },
+    "gamma099": {
+     "val_e": 0.5000984872380891,
+     "val_fall_rate": 0.047619047619047616
+    }
+   },
+   "best": "base",
+   "val_e": 0.44985573898468706,
+   "val_fall_rate": 0.02857142857142857,
+   "competent": true
+  },
+  "fastsac": {
+   "configs": {
+    "base": {
+     "val_e": 0.48741810108934125,
+     "val_fall_rate": 0.07857142857142857
+    },
+    "lr_div3": {
+     "val_e": 0.5470548171017852,
+     "val_fall_rate": 0.11666666666666667
+    },
+    "lr_x3": {
+     "val_e": 0.5024236928139414,
+     "val_fall_rate": 0.08571428571428572
+    },
+    "gamma097": {
+     "val_e": 0.4678776892168181,
+     "val_fall_rate": 0.10476190476190476
+    }
+   },
+   "best": "gamma097",
+   "val_e": 0.4678776892168181,
+   "val_fall_rate": 0.10476190476190476,
+   "competent": true
+  },
+  "ars": {
+   "configs": {
+    "base": {
+     "val_e": 3.0834707174982348,
+     "val_fall_rate": 1.0
+    },
+    "lr_div3": {
+     "val_e": 1.9877161535478773,
+     "val_fall_rate": 0.6095238095238096
+    },
+    "lr_x3": {
+     "val_e": 3.0999742666880286,
+     "val_fall_rate": 1.0
+    },
+    "noise_x2": {
+     "val_e": 2.7418853870459965,
+     "val_fall_rate": 0.9523809523809523
+    }
+   },
+   "best": "lr_div3",
+   "val_e": 1.9877161535478773,
+   "val_fall_rate": 0.6095238095238096,
+   "competent": false
+  },
+  "dagger": {
+   "configs": {
+    "base": {
+     "val_e": 0.3697170824699459,
+     "val_fall_rate": 0.0380952380952381
+    },
+    "lr_div3": {
+     "val_e": 0.37891308138413093,
+     "val_fall_rate": 0.05
+    },
+    "lr_x3": {
+     "val_e": 0.40418623776308127,
+     "val_fall_rate": 0.09523809523809523
+    },
+    "epochs_x2": {
+     "val_e": 0.3932890487036535,
+     "val_fall_rate": 0.08571428571428572
+    }
+   },
+   "best": "base",
+   "val_e": 0.3697170824699459,
+   "val_fall_rate": 0.0380952380952381,
+   "competent": true
+  }
+ }
+}
