@@ -47,11 +47,27 @@ the rules above (new values, one variant each, same clean checks, failing source
          --extend-test ../open-duck-curation/data/clips_v9 --gaits ../open-duck-curation/data/placo_gaits_v9x \
          --v7 ../open-duck-curation/data/clips_v7 --out ../open-duck-curation/data/clips_v9x
   3. python3 curation/clips/make_v9.py --verify data/clips_v9x --doc docs/DATASET_V9X.md
+
+v9c (--contaminate, the contamination follow-up of PREREG_V3): clips_v9x unchanged (every clip, same id, index and
+arrays) with broken TRAIN copies appended, k = N / 84 per clean train clip for --broken N (6k per type, balanced). The
+clean train clips are regenerated as in v9 and checked bit for bit against clips_v9x, then broken by the generator
+above. v9's 25 broken clips are copy 0 of their clean clip; copy r of every other clip draws its impossible kinds in
+turn (the kinds its type allows, rotated by clip and copy; parameters vary with clip and copy, so no two copies are the
+same), the first that passes its check is kept, and a clip none passes becomes corrupted. Per copy round, corrupted
+clips are then topped up (even across types) to v9's mix, 16 impossible : 9 corrupted. Copy r is in every dose with
+k > r, so a smaller dose's library is the first rows of a larger one's (one run writes every dose).
+  1. cd Open_Duck_Playground && .venv/bin/python ../open-duck-curation/curation/clips/make_v9.py \
+         --contaminate ../open-duck-curation/data/clips_v9x --gaits ../open-duck-curation/data/placo_gaits_v9 \
+         --v7 ../open-duck-curation/data/clips_v7 --broken 84 252 \
+         --out ../open-duck-curation/data/clips_v9c50 ../open-duck-curation/data/clips_v9c75 --jobs 6
+  2. python3 curation/clips/make_v9.py --verify data/clips_v9c50 --doc docs/DATASET_V9C.md (and data/clips_v9c75)
 """
 
 import argparse
 import collections
+import hashlib
 import json
+import multiprocessing
 import os
 import subprocess
 import sys
@@ -206,6 +222,103 @@ BROKEN = [("walk_fwd", "shove", dict(dx=-0.07)), ("walk_fwd", "noise", {}),
 SPEED_FALLBACK = ["walk_turn", "turn_in_place", "walk_back", "walk_fwd", "leg_lift", "crouch", "headbang", "bow"]
 SHOVE_IK_MAX = 0.03  # m: a shove whose soles cannot be kept in place is not a shove
 IMPOSSIBLE = ("shove", "joint_limit", "takeoff", "speed", "one_foot_long")
+# v9c: per-copy parameter schedules (copy r, clip j of its type, re-draw i); v9's own values are copy 0's first draw
+SEED_C = 90  # noise / glitch draws: np.random.default_rng([SEED_C, type, clip, copy])
+IMP_FRAC = 16 / 25  # v9's impossible share, kept per copy round
+OFL_LIFTS = ((0.03, 0.025), (0.045, 0.03), (0.06, 0.035))  # one_foot (fwd, up) m, as v9
+CORRUPTED = ("noise", "glitch", "foot_skate")
+
+
+def imp_kinds(cat, e):
+    """Impossible kinds a clean train clip allows: a gait (march too) has no amplitude to push and no double-support
+    stretch to raise a foot from; hops take off; leg lifts hold their single-support frame."""
+    fam = e.get("family") or cat
+    if cat in GAIT_TYPES or fam == "march":
+        return ["shove", "speed"]
+    if cat == "hop":
+        return ["takeoff", "shove", "speed"]
+    if fam in ("stomp", "kick", "dance", "headbang", "twist"):
+        return ["joint_limit", "one_foot_long", "shove", "speed"]
+    return ["shove", "one_foot_long", "speed"]
+
+
+def redraws(fn, kind, cat, j, r, e0, base):
+    """Candidates (arrays, evidence, ok) for one impossible kind on copy r of clean clip j; the parameters differ with
+    j and r (shove 1 cm per copy, growing 3 cm per re-draw, gaits backwards and the rest forward or back in turn;
+    speed 2-3x; one_foot side and lift; joint-limit amplitude scale; take-off height 1 mm per slot)."""
+    fam = e0.get("family") or cat
+    if kind == "shove":
+        mag = lambda s, i: (0.12 if s > 0 else 0.07) + 0.01 * r + 0.03 * i  # noqa: E731
+        gait = cat in GAIT_TYPES or fam == "march"
+        s = -1 if gait else (1 if (j + r) % 2 == 0 else -1)
+        seq = [s * mag(s, i) for i in range(3)] if gait else [s * mag(s, 0), s * mag(s, 1), -s * mag(-s, 0), -s * mag(-s, 1)]
+        for dx in seq:
+            yield fn["shove"](base, round(dx, 3))
+    elif kind == "speed":
+        for kf in (2.0 + 0.15 * (r % 3), 2.5 + 0.15 * (r % 3), 3.0 - 0.05 * (r % 3)):
+            yield fn["speed"](base, round(kf, 2))
+    elif kind == "one_foot_long":
+        if fam in ("stomp", "kick"):
+            yield fn["hold_ss"](base, (2.5, 2.2, 2.8)[r % 3])
+        else:
+            for i in range(6):
+                f, u = OFL_LIFTS[(i // 2 + r) % 3]
+                yield fn["one_foot"](base, (j + r + i) % 2, (round(f + 0.005 * r, 3), u))
+    elif kind == "joint_limit":
+        for _, _, clip in fn["amplify"](e0, kind, round(1 + 0.1 * r + 0.03 * j, 3)):
+            q, pos, quat, con, prm = clip
+            rep, _ = fn["measure"](np.clip(q, fn["lo"], fn["hi"]), pos, quat, con)
+            yield (q, pos, quat, con), {"params": prm, "joint_limit_margin_rad": rep["joint_limit_margin_rad"]}, \
+                not rep["pass"] and rep["joint_limit_margin_rad"] <= 1e-3
+    elif kind == "takeoff":
+        for i in range(2):
+            p2 = dict({k: v for k, v in e0["params"].items() if k != "ik_foot_err_mm"}, h=round(0.025 + 0.001 * (6 * r + j) + 0.01 * i, 4))
+            q, pos, quat, con, prm = fn["wild"]("hop", p2)
+            _, dyn = fn["measure"](np.clip(q, fn["lo"], fn["hi"]), pos, quat, con)
+            yield (q, pos, quat, con), {"params": prm, "takeoff_need_m_s": dyn["takeoff_need_m_s"],
+                                        "takeoff_can_m_s": dyn["takeoff_can_m_s"]}, dyn["takeoff_fail"]
+
+
+def impossible_slot(fn, slot):
+    """Copy r of clean clip j: the clip's impossible kinds in turn (rotated by j + r), each re-drawn; the first that passes
+    its check is kept. Returns (kind, arrays, evidence) or None, and the rejections."""
+    r, cat, j = slot
+    e0, base = fn["train"][cat][j]
+    ks = imp_kinds(cat, e0)
+    ks = ks[(j + r) % len(ks):] + ks[:(j + r) % len(ks)]
+    rej = []
+    for kind in ks:
+        ev = None
+        for arr, ev, ok in redraws(fn, kind, cat, j, r, e0, base):
+            if ok:
+                return (kind, arr, ev), rej
+        rej.append(f"{e0['id']} copy {r}: {kind} rejected (last: {json.dumps(ev, default=str)[:160]})")
+    return None, rej
+
+
+_SLOT = None  # set before the worker pool forks (the break functions are closures over the model)
+
+
+def _slot(s):
+    return _SLOT(s)
+
+
+def confirmed(c):
+    """An impossible clip's own check, read back from its manifest entry (the evidence it was kept on)."""
+    k, ev = c["contaminant"], c["feasibility"]["evidence"]
+    if k == "speed":
+        return ev["rate_lag_rad"] > ev["lag_bar_rad"]
+    if k == "takeoff":
+        return bool(c["dynamic"]["takeoff_fail"]) and ev["takeoff_need_m_s"] > ev["takeoff_can_m_s"]
+    if k == "joint_limit":
+        return not c["check"]["pass"] and c["check"]["joint_limit_margin_rad"] <= 1e-3
+    if k == "shove":
+        return not ev["hold"]["held"] and ev["ik_foot_err_mm"] <= 1000 * SHOVE_IK_MAX
+    return not ev["hold"]["held"] and ev["clearance_mm"] >= 8.0 and ev.get("ik_foot_err_mm", 0) <= 1000 * SHOVE_IK_MAX
+
+
+def row_hash(lib, i):
+    return hashlib.sha1(b"".join(lib[k][i].tobytes() for k in ("q", "base_pos", "base_quat", "contacts"))).hexdigest()
 
 
 def gait_name(cat, src, style):
@@ -362,12 +475,13 @@ def build_library(a):
         x_src = listed_sources(G, MA, LW, ST, WI, clip_id)
         assert len(set(x_src)) == len(x_src), "a v9x source is listed twice"
         assert not v9_src & set(x_src), sorted(v9_src & set(x_src))
+    splits = ("train",) if a.contaminate else ("train", "val", "test")  # v9c breaks train clips only
     for cat in GAIT_TYPES + ["march"]:
         spec = G.get(cat) if cat != "march" else MA
         tcat = "leg_lift" if cat == "march" else cat
         spares = list(spec["spare"])
         j0 = len((GAITS.get(cat) or MARCH)["test"]) if ext else 0
-        for split in ("train", "val", "test"):
+        for split in splits:
             for j, src in enumerate(spec.get(split, []), j0 if split == "test" else 0):
                 while True:
                     sid = gait_name(cat, src, "x").rsplit("__", 1)[0]
@@ -387,7 +501,7 @@ def build_library(a):
                         notes.append(f"{cat}: out of spares")
                         break
                     src = spares.pop(0)
-    for split in ("train", "val", "test"):
+    for split in splits:
         spares = list(LW["spare"])
         for fam, prm in LW.get(split, []):
             while not add("leg_lift", clip_id(fam, prm), clip_id(fam, prm), split, wild(fam, prm), "keyframed", {"family": fam}):
@@ -400,14 +514,14 @@ def build_library(a):
             for v in STAT_VARIANTS[cat]:
                 if not add(cat, f"{sid_of(src)}__{v}", sid_of(src), "train", stat(cat, src, v), "ik"):
                     notes.append(f"{sid_of(src)}__{v} (train) failed the checks")
-        for split in ("val", "test"):
+        for split in splits[1:]:
             for src, v in spec.get(split, []):
                 while not add(cat, f"{sid_of(src)}__{v}", sid_of(src), split, stat(cat, src, v), "ik"):
                     notes.append(f"{sid_of(src)}__{v} ({split}) failed the checks; replaced by a spare")
                     src, v = spares.pop(0)
     for fam, spec in WI.items():
         spares = list(spec["spare"])
-        for split in ("train", "val", "test"):
+        for split in splits:
             for s in spec.get(split, []):
                 while not add(fam, clip_id(fam, WILD_PRM[fam](s)), clip_id(fam, WILD_PRM[fam](s)), split,
                               wild(fam, WILD_PRM[fam](s)), "keyframed"):
@@ -427,11 +541,16 @@ def build_library(a):
         return [(d.site_xpos[s].copy(), d.site_xmat[s].reshape(3, 3).copy()) for s in sites]
 
     Wr = np.array([0.3, 0.3, 0.3])
+    keep_head = bool(a.contaminate)  # v9c: head motion kept in IK-edited copies (see solve_feet), whole holds
 
-    def solve_feet(q0, pos, quat, tgt, iters=120):
-        """Leg joints that put each sole at its target (world pos, rot) with the base at pos / quat."""
+    def solve_feet(q0, pos, quat, tgt, iters=120, q_ref=None):
+        """Leg joints that put each sole at its target (world pos, rot) with the base at pos / quat. Seeded from q0 (the
+        previous solved frame), so the head joints are q0's: in v9 they stay at frame 0's pose (the head motion is lost);
+        v9c passes the frame's own pose as q_ref and keeps its head joints (they are not in the leg chains)."""
         qf = home.qpos.copy()
         qf[0:3], qf[3:7], qf[qadr] = pos, quat, q0
+        if q_ref is not None:
+            qf[qadr[5:9]] = q_ref[5:9]
         err = 0.0
         for _ in range(iters):
             d.qpos[:] = qf
@@ -481,7 +600,7 @@ def build_library(a):
         for k in range(n):
             tgt = fk_feet(q[k], pos[k], quat[k])
             pos2[k] = pos[k] + s[k] * heading(quat[k])
-            q2[k], err = solve_feet(q2[k - 1] if k else q[k], pos2[k], quat[k], tgt)
+            q2[k], err = solve_feet(q2[k - 1] if k else q[k], pos2[k], quat[k], tgt, q_ref=q[k] if keep_head else None)
             worst = max(worst, err)
         ds = [k for k in range(n) if s[k] >= 0.98 * dx if dx > 0] or [k for k in range(n) if s[k] <= 0.98 * dx]
         ds = [k for k in ds if con[k].min() > 0.5]
@@ -512,7 +631,7 @@ def build_library(a):
         for k in range(n):
             tgt = fk_feet(q[k], pos[k], quat[k])
             tgt[side] = (tgt[side][0] + f[k] * (lift[0] * heading(quat[k]) + np.array([0, 0, lift[1]])), tgt[side][1])
-            q2[k], err = solve_feet(q2[k - 1] if k else q[k], pos[k], quat[k], tgt)
+            q2[k], err = solve_feet(q2[k - 1] if k else q[k], pos[k], quat[k], tgt, q_ref=q[k] if keep_head else None)
             worst = max(worst, err)
         c2 = con.copy()
         c2[f > 0.05, side] = 0
@@ -538,17 +657,19 @@ def build_library(a):
             mujoco.mj_kinematics(m, d)
             up = int(np.argmin(con[k]))
             hgt.append(sole_low(up) - sole_low(1 - up))
-        k = ss[int(np.argmax(hgt))]
         rep = int(hold_s * ml.FPS)
+        if keep_head:  # v9c: the highest frame whose whole hold fits in the 4 s (v9's stomp copy held frame 138, so only
+            hgt = [h_ if k + rep <= T else -1.0 for k, h_ in zip(ss, hgt)]  # 1.2 s of its 2.5 s survived the cut)
+        k = ss[int(np.argmax(hgt))]
         sel = list(range(k)) + [k] * rep + list(range(k, len(q)))
         sel = sel[:T]
         q2, pos2, quat2, c2 = q[sel], pos[sel], quat[sel], con[sel]
         h = ht.hold(m, d, qadr, q[k], grounded(q[k], pos[k], quat[k], int(np.argmax(con[k]))), quat[k], con[k])
         return (q2, pos2, quat2, c2), {"held_frame": k, "raised_s": hold_s, "raised_foot": "left" if con[k, 0] < 0.5 else "right",
                                        "clearance_mm": round(1000 * max(hgt), 1), "hold": h}, \
-            (not h["held"]) and max(hgt) > 0.008
+            (not h["held"]) and max(hgt) > 0.008 and (not keep_head or k + rep <= T)
 
-    def noise(base, amp=0.07):
+    def noise(base, amp=0.07, rng=rng):
         q, pos, quat, con = base
         b, a_ = butter(2, [3 / (ml.FPS / 2), 8 / (ml.FPS / 2)], btype="band")
         z = filtfilt(b, a_, rng.standard_normal((len(q) + 100, 14)), axis=0)[50:50 + len(q)]
@@ -556,7 +677,7 @@ def build_library(a):
         env = ml.minjerk(t_of(len(q)) / 0.3)[:, None]
         return (q + env * z, pos, quat, con), {"band_hz": [3, 8], "rms_rad": amp}, True
 
-    def glitch(base):
+    def glitch(base, rng=rng):
         q, pos, quat, con = base
         q2, ev = q.copy(), []
         times = np.sort(rng.choice(np.arange(int(0.5 * ml.FPS), len(q) - int(0.5 * ml.FPS)), 3, replace=False))
@@ -567,7 +688,7 @@ def build_library(a):
             ev.append({"frame": int(k), "frames": 4, "joints": [ml.ACT[j] for j in js], "offset_rad": [round(float(o), 3) for o in off]})
         return (q2, pos, quat, con), {"jumps": ev}, True
 
-    def skate(base, dist=0.04):
+    def skate(base, dist=0.04, foot=0):
         q, pos, quat, con = base
         n = len(q)
         t = t_of(n)
@@ -575,11 +696,11 @@ def build_library(a):
         q2, worst, slid = q.copy(), 0.0, 0
         for k in range(n):
             tgt = fk_feet(q[k], pos[k], quat[k])
-            tgt[0] = (tgt[0][0] + s[k] * heading(quat[k]), tgt[0][1])
-            q2[k], err = solve_feet(q2[k - 1] if k else q[k], pos[k], quat[k], tgt)
+            tgt[foot] = (tgt[foot][0] + s[k] * heading(quat[k]), tgt[foot][1])
+            q2[k], err = solve_feet(q2[k - 1] if k else q[k], pos[k], quat[k], tgt, q_ref=q[k] if keep_head else None)
             worst = max(worst, err)
-            slid += int(con[k, 0] > 0.5 and s[k] > 0.005)
-        return (q2, pos, quat, con), {"slide_m": dist, "foot": "left", "frames_sliding_in_contact": slid,
+            slid += int(con[k, foot] > 0.5 and s[k] > 0.005)
+        return (q2, pos, quat, con), {"slide_m": dist, "foot": ("left", "right")[foot], "frames_sliding_in_contact": slid,
                                       "ik_foot_err_mm": round(1000 * worst, 1)}, slid > 10
 
     train = {c: [(e, arr) for e, arr in clips if e["category"] == c and e["split"] == "train"] for c in TYPES}
@@ -593,14 +714,20 @@ def build_library(a):
         used[cat] += 1
         return x
 
-    def amplify(e, kind):
+    def amplify(e, kind, scale=1.0):
         fam = e.get("family") or e["category"]
         prm = {k: v for k, v in e["params"].items() if k != "ik_foot_err_mm"}
         tries = {"dance": [("a", 1.4), ("a", 1.6)], "headbang": [("a", 0.95), ("a", 1.1)], "twist": [("a", 0.65), ("a", 0.8)],
                  "stomp": [("lift", 0.06), ("lift", 0.08)], "kick": [("r", 0.10), ("r", 0.12)], "hop": [("h", 0.025), ("h", 0.03)]}[fam]
         for k_, v in tries:
-            p2 = dict(prm, **{k_: v})
+            p2 = dict(prm, **{k_: v if scale == 1 else round(v * scale, 4)})  # v9c scales the push per copy
             yield fam, p2, wild(fam, p2)
+
+    if a.contaminate:
+        fn = dict(train=train, shove=shove, speed=speed, one_foot=one_foot, hold_ss=hold_single_support, noise=noise,
+                  glitch=glitch, skate=skate, amplify=amplify, wild=wild, measure=measure, lo=lo, hi=hi)
+        return write_contaminated(a, fn, notes, m, d, qadr, T, {"rate_lag_rad": round(LAG_BAR, 3),
+                                                                "zmp_min_margin_mm": round(ZMP_BAR, 1), "n_gait_clips": len(lags)})
 
     for cat, kind, opt in BROKEN:
         done = False
@@ -743,6 +870,151 @@ def write_extended(a, clips, notes, m, d, qadr, T, bars):
     print(f"{a.out}: {N} clips from {a.extend_test} + {len(clips)} new test clips")
 
 
+def write_contaminated(a, fn, notes, m, d, qadr, T, bars):
+    """v9c: the clips_v9x library unchanged (same rows, ids, indices) with broken train copies appended, k per clean train
+    clip for each --broken N (k = N / 84); one library per N, a smaller dose being the first rows of a larger one."""
+    global _SLOT
+    from make_infeasible import arrays
+    base = np.load(os.path.join(a.contaminate, "library.npz"))
+    man = json.load(open(os.path.join(a.contaminate, "manifest.json")))
+    assert bars == man["bars_from_v7_walking"], (bars, man["bars_from_v7_walking"])
+    assert len(a.broken) == len(a.out) and all(n % 84 == 0 for n in a.broken), (a.broken, a.out)
+    train, N0, K = fn["train"], len(man["clips"]), max(a.broken) // 84
+
+    def row(q, pos, quat, con):
+        out = {}
+        for k_, x in arrays(m, d, qadr, q, pos, quat, con).items():
+            out[k_] = np.zeros((T,) + x.shape[1:], dtype=base[k_].dtype)
+            out[k_][:len(x)], out[k_][len(x):] = x, x[-1]
+        return out
+
+    # the regenerated clean train clips are clips_v9x's, entry and arrays bit for bit (they are what gets broken)
+    by_id = {c["id"]: c for c in man["clips"]}
+    for cat in TYPES:
+        assert len(train[cat]) == 6, (cat, len(train[cat]))
+        for e, arr in train[cat]:
+            c = dict(by_id[e["id"]])
+            i = c.pop("index")
+            e_ = json.loads(json.dumps({k: v for k, v in e.items() if not (k == "family" and v is None)}, default=float))
+            assert e_ == c, e["id"]
+            assert all(x.tobytes() == base[k_][i].tobytes() for k_, x in row(*arr).items()), e["id"]
+    print(f"{sum(map(len, train.values()))} regenerated clean train clips identical to {a.contaminate}")
+
+    # copy 0 of a clip v9 broke is v9's broken clip; every other (copy, type, clip) slot is drawn here
+    jof = {e["id"]: (cat, j) for cat in TYPES for j, (e, _) in enumerate(train[cat])}
+    v9b = {jof[c["derived_from"]]: c for c in man["clips"] if c.get("contaminant")}
+    assert len(v9b) == sum(1 for c in man["clips"] if c.get("contaminant")), "v9 broke a clip twice"
+    slots = [(r, cat, j) for r in range(K) for cat in TYPES for j in range(6) if r or (cat, j) not in v9b]
+    _SLOT = lambda s: impossible_slot(fn, s)  # noqa: E731
+    if a.jobs > 1:
+        with multiprocessing.get_context("fork").Pool(a.jobs) as pool:
+            res = dict(zip(slots, pool.map(_slot, slots, chunksize=1)))
+    else:
+        res = {s: _slot(s) for s in slots}
+    snotes = collections.defaultdict(list)  # notes by copy round
+    for s in slots:
+        snotes[s[0]] += res[s][1]
+
+    # per copy round: corrupted = clips no impossible kind passed, topped up evenly across types to v9's mix; the top-up
+    # takes the type's most common impossible kind first; a corrupted kind is the type's least used so far
+    imp_n = {c: collections.Counter() for c in TYPES}
+    cor_n = {c: collections.Counter() for c in TYPES}
+    for (cat, _), c in v9b.items():
+        (imp_n if c["contaminant"] in IMPOSSIBLE else cor_n)[cat][c["contaminant"]] += 1
+    final = {}
+    for r in range(K):
+        rs = [s for s in slots if s[0] == r]
+        corr = collections.Counter({c: sum(1 for (c_, _), x in v9b.items() if c_ == c and x["contaminant"] not in IMPOSSIBLE)
+                                    for c in TYPES} if r == 0 else {})
+        to_cor = []
+        for s in rs:
+            if res[s][0] is None:
+                to_cor.append(s)
+                corr[s[1]] += 1
+                snotes[r].append(f"{train[s[1]][s[2]][0]['id']} copy {r}: no impossible kind passed; made corrupted")
+            else:
+                imp_n[s[1]][res[s][0][0]] += 1
+        target = 84 - round(84 * IMP_FRAC)
+        avail = {c: [s for s in rs if s[1] == c and res[s][0] is not None] for c in TYPES}
+        topped = 0
+        while sum(corr.values()) < target and any(avail.values()):
+            c = min((c for c in TYPES if avail[c]), key=lambda c: (corr[c], (TYPES.index(c) - 5 * r) % len(TYPES)))
+            s = max(avail[c], key=lambda s: (imp_n[c][res[s][0][0]], -s[2]))
+            avail[c].remove(s)
+            imp_n[c][res[s][0][0]] -= 1
+            to_cor.append(s)
+            corr[c] += 1
+            topped += 1
+        nc = sum(corr.values())
+        snotes[r].append(f"copy {r}: {topped} clips whose impossible kind passed were made corrupted for v9's mix "
+                         f"({84 - nc} impossible : {nc} corrupted, target {84 - target} : {target})")
+        for s in rs:
+            if s not in to_cor:
+                final[s] = res[s][0]
+        for s in sorted(to_cor, key=lambda s: (TYPES.index(s[1]), s[2])):
+            _, cat, j = s
+            ks = sorted(CORRUPTED[(j + r) % 3:] + CORRUPTED[:(j + r) % 3], key=lambda k: cor_n[cat][k])
+            for kind in ks:
+                rng = np.random.default_rng([SEED_C, TYPES.index(cat), j, r])
+                arr, ev, ok = (fn["noise"](train[cat][j][1], rng=rng) if kind == "noise" else
+                               fn["glitch"](train[cat][j][1], rng=rng) if kind == "glitch" else
+                               fn["skate"](train[cat][j][1], dist=(0.04, 0.035, 0.045)[r % 3], foot=(j + r) % 2))
+                if ok:
+                    break
+                snotes[r].append(f"{train[cat][j][0]['id']} copy {r}: {kind} rejected ({json.dumps(ev, default=str)[:160]})")
+            cor_n[cat][kind] += 1
+            final[s] = (kind, arr, ev)
+
+    # entries (as v9's broken clips) in copy, type, clip order; ids as v9 ("b" appended while taken)
+    ids = {c["id"] for c in man["clips"]}
+    new, rows, hashes = [], [], {row_hash(base, i): c["id"] for i, c in enumerate(man["clips"])}
+    for s in sorted(final, key=lambda s: (s[0], TYPES.index(s[1]), s[2])):
+        r, cat, j = s
+        kind, (q, pos, quat, con), ev = final[s]
+        e0 = train[cat][j][0]
+        q = np.clip(q, fn["lo"], fn["hi"])
+        rep, dyn = fn["measure"](q, pos, quat, con)
+        fam = "impossible" if kind in IMPOSSIBLE else "corrupted"
+        cid = f"{e0['id']}__broken_{kind}"
+        while cid in ids:
+            cid += "b"
+        ids.add(cid)
+        e = {"id": cid, "category": cat, "source": cid, "derived_from": e0["id"], "split": "train",
+             "params": e0["params"], "check": rep, "dynamic": dyn, "length": len(q), "contaminant": kind,
+             "generator": "broken", "family": e0.get("family"),
+             "feasibility": {"infeasible": fam == "impossible", "corrupted": True, "family": fam, "kind": kind,
+                             "kinematic": rep["pass"], "evidence": ev}, "new_in": "v9c", "copy": r}
+        if e["family"] is None:
+            e.pop("family")
+        e = json.loads(json.dumps(e, default=float))
+        assert fam == "corrupted" or confirmed(e), (cid, ev)
+        rw = row(q, pos, quat, con)
+        h = hashlib.sha1(b"".join(rw[k_].tobytes() for k_ in ("q", "base_pos", "base_quat", "contacts"))).hexdigest()
+        assert h not in hashes, f"{cid} repeats {hashes.get(h)}"
+        hashes[h] = cid
+        new.append(e)
+        rows.append(rw)
+        print(f"  broken {cid:64s} copy {r} {fam:10s} {json.dumps(ev, default=str)[:120]}")
+
+    ntr = sum(c["split"] == "train" and not c.get("contaminant") for c in man["clips"])
+    for nb, out in zip(a.broken, a.out):
+        k = nb // 84
+        sel = [x for x, e in enumerate(new) if e["copy"] < k]
+        lib = {k_: np.concatenate([base[k_]] + [rows[x][k_][None] for x in sel]) for k_ in rows[0]}
+        lib["length"] = np.concatenate([base["length"], np.array([new[x]["length"] for x in sel], dtype=base["length"].dtype)])
+        ver = f"v9c{round(100 * nb / (ntr + nb))}"
+        os.makedirs(out, exist_ok=True)
+        np.savez_compressed(os.path.join(out, "library.npz"), **lib)
+        manifest = dict(man, version=ver, extended_from=os.path.basename(os.path.normpath(a.contaminate)),
+                        split=man["split"] + f"; {ver} appends {len(sel)} broken train copies (make_v9.py --contaminate)",
+                        contamination={"broken": nb, "per_clean_clip": k, "seed": SEED_C, "impossible_share": IMP_FRAC,
+                                       "v9_broken_kept": len(v9b), "doses": sorted(a.broken)},
+                        notes=man["notes"] + [f"{ver}: {x}" for r in range(k) for x in snotes[r]],
+                        clips=man["clips"] + [dict(new[x], index=N0 + i) for i, x in enumerate(sel)])
+        json.dump(manifest, open(os.path.join(out, "manifest.json"), "w"), indent=1, default=float)
+        print(f"{out}: {N0} clips from {a.contaminate} + {len(sel)} broken copies ({nb} broken with v9's)")
+
+
 # ----------------------------------------------------------------------------------------------- verify and doc
 def verify(lib_dir):
     lib = np.load(os.path.join(lib_dir, "library.npz"))
@@ -792,6 +1064,8 @@ def verify(lib_dir):
         for k in lib.files:
             assert lib[k].dtype == blib[k].dtype and lib[k][:nb_].tobytes() == blib[k].tobytes(), k
         xs = cl[nb_:]
+        if man.get("contamination"):  # v9c: appended clips are broken train copies, k per clean train clip
+            return verify_contaminated(lib, man, cl, bcl, xs)
         assert all(c["split"] == "test" and c.get("new_in") == "v9x" and c["check"]["pass"] for c in xs)
         bars = man["bars_from_v7_walking"]
         for c in xs:
@@ -803,6 +1077,27 @@ def verify(lib_dir):
         assert not sp & {c["source"] for c in xs}
         print(f"  {man['extended_from']}: {nb_} clips identical (manifest + {len(lib.files)} arrays, bit for bit); "
               f"{len(xs)} new test clips, all pass the clean checks, no source shared with {man['extended_from']}")
+
+
+def verify_contaminated(lib, man, cl, bcl, xs):
+    """v9c: every appended clip is a broken train copy of a clean train clip of its type, each clean train clip has
+    exactly k copies (v9's included), every impossible copy passes its check, and no two clips are the same."""
+    k = man["contamination"]["per_clean_clip"]
+    assert len(xs) + sum(1 for c in bcl if c.get("contaminant")) == man["contamination"]["broken"] == 84 * k
+    assert all(c["split"] == "train" and c.get("contaminant") and c.get("new_in") == "v9c" and 0 <= c["copy"] < k for c in xs)
+    clean = {c["id"] for c in cl if c["split"] == "train" and not c.get("contaminant")}
+    br = [c for c in cl if c.get("contaminant")]
+    per = collections.Counter(c["derived_from"] for c in br)
+    assert set(per) == clean and set(per.values()) == {k}, per
+    imp = [c for c in br if c["contaminant"] in IMPOSSIBLE]
+    bad = [c["id"] for c in imp if not confirmed(c) or not c["feasibility"]["infeasible"]]
+    assert not bad, bad
+    assert all(c["feasibility"]["family"] == ("impossible" if c["contaminant"] in IMPOSSIBLE else "corrupted") for c in br)
+    h = [row_hash(lib, c["index"]) for c in cl]
+    assert len(set(h)) == len(h), "two clips are the same"
+    print(f"  {man['extended_from']}: {len(bcl)} clips identical (manifest + {len(lib.files)} arrays, bit for bit); "
+          f"{len(xs)} broken copies appended; {k} per clean train clip ({6 * k} per type); {len(imp)} impossible "
+          f"({100 * len(imp) / len(br):.1f}%), all pass their checks; no two clips the same")
 
 
 def describe(c):
@@ -845,6 +1140,82 @@ def evidence(c):
     return f"{ev['foot']} sole slides {100 * ev['slide_m']:.0f} cm over {ev['frames_sliding_in_contact']} frames in contact"
 
 
+def contam_txt(man, base, br):
+    """v9c Contents bullets."""
+    k, nb = man["contamination"]["per_clean_clip"], man["contamination"]["broken"]
+    nx = sum(1 for c in br if c.get("new_in"))
+    return f"""- **Contamination of `data/{base}`:** every {base} clip is copied unchanged (same id, index and arrays, checked
+  bit for bit by `--verify`), so the 84 clean train clips, val and test are exactly {base}'s; {nx} broken train copies
+  are appended (`"new_in": "v9c"`). With v9's {man['contamination']['v9_broken_kept']} broken clips, every clean train clip has exactly **{k}** broken
+  {'copy' if k == 1 else 'copies'} ({6 * k} per type, {nb} in all). A copy's `copy` field is its round (v9's clips are copy 0): copy r is in every
+  library with more than r copies per clip, so a smaller dose's library is the first rows of a larger one's:
+{chr(10).join(f"  - `data/clips_{dose_name(man, n)}`: {len(man['clips']) - nb + n} clips (the first {len(man['clips']) - nb + n} rows), train {84 + n} = 84 clean + "
+              f"{n} broken ({100 * n / (84 + n):.0f}%), {n // 84} per clean train clip" for n in man["contamination"]["doses"])}
+- Broken copies are made by the v9 generator (`make_v9.py --contaminate`): copy r of a clean clip tries the impossible
+  kinds its type allows in turn (rotated by clip and copy) and keeps the first that passes its check; parameters change
+  with clip and copy (shove size and direction, compression, raised foot and lift, amplitude, hop height, noise seed),
+  so no two clips are the same (checked by `--verify`). A clip no impossible kind passes is corrupted instead, and each
+  round is topped up with corrupted clips, evenly across types, to v9's 16 impossible : 9 corrupted.
+"""
+
+
+V9C_DEPARTURES = """## Departures (v9c)
+
+- **Balance unit.** "Balanced across types" is read as one broken copy per clean train clip per dose round (6 per
+  type at 84, 18 at 252), so each clean clip is broken equally often.
+- **Head motion kept (v9 generator fix, v9c only).** v9's shove, one_foot_long (IK) and foot_skate seed each frame's
+  IK from the previous solved frame, so the head joints stay at frame 0's pose and the head motion is lost (in v9:
+  `head__nod_a1__slow__broken_shove`, `head__nod_a1__fast__broken_one_foot_long`, `dance__f1.5_a0.5__broken_foot_skate`;
+  the latter two head clips are still for most of the clip). Left as is, two head clips with the same leg edit come out
+  identical. v9c keeps each frame's head joints (not in the leg chains, so the leg solution is unchanged); v9's 25
+  clips are kept exactly as built.
+- **Whole single-support holds (v9c only).** v9's leg-lift hold picks the highest single-support frame, and for its
+  stomp copy that is frame 138, so only 1.2 s of the recorded 2.5 s hold fits in the 4 s clip. v9c picks the highest
+  frame whose whole hold fits. v9's clip is kept as built.
+- **Kind mix per type.** The 16 : 9 mix is met per dose (64.3%), not per type. Gaits allow only shove (backwards,
+  7-15 cm) and speed (2-3x), and most walk_fwd / walk_back / turn_in_place / walk_turn copies pass neither, so those
+  types are mostly corrupted (walk_back 1 impossible of 18 at 75%); the top-up then makes fewer corrupted clips in the
+  other types (up to 15 impossible of 18). Speed was not pushed past 3x, nor shoves past 15 cm.
+- **Parameter schedules.** Shoves grow 3 cm per re-draw with 1 cm per copy (v9: 2 cm steps); non-gait shoves alternate
+  forward / back; foot_skate alternates the foot and slides 3.5-4.5 cm (v9: left, 4 cm); hop take-off heights step 1 mm
+  per slot (2.5-4.2 cm). "No two the same" is checked as exact array equality: a few copies differ only slightly
+  (for example two hops 1 mm apart in height).
+
+"""
+
+
+def dose_name(man, n):
+    return f"v9c{round(100 * n / (84 + n))}"
+
+
+def contam_tables(man, br):
+    """v9c: broken clips per type and kind in each dose's library, and the impossible clips' checks."""
+    ks = [k for k in IMPOSSIBLE + CORRUPTED if any(c["contaminant"] == k for c in br)]
+    out = []
+    for nd in man["contamination"]["doses"]:
+        bd = [c for c in br if c.get("copy", 0) < nd // 84]
+        n = collections.Counter((c["category"], c["contaminant"]) for c in bd)
+        imp = [c for c in bd if c["contaminant"] in IMPOSSIBLE]
+        rows = [f"| {t} | " + " | ".join(str(n[(t, k)]) for k in ks) + f" | {sum(n[(t, k)] for k in ks if k in IMPOSSIBLE)} | "
+                f"{sum(n[(t, k)] for k in ks if k in CORRUPTED)} |" for t in man["types"]]
+        tot = collections.Counter(c["contaminant"] for c in bd)
+        rows.append("| **all** | " + " | ".join(f"**{tot[k]}**" for k in ks) + f" | **{len(imp)}** | **{len(bd) - len(imp)}** |")
+        out.append(f"""
+**{dose_name(man, nd)}** ({len(bd)} broken: {len(imp)} impossible = {100 * len(imp) / len(bd):.1f}%, v9's mix is 64.0%; impossible clips
+passing their check: **{sum(map(confirmed, imp))} of {len(imp)}**):
+
+| type | {" | ".join(ks)} | impossible | corrupted |
+|---|{"---|" * (len(ks) + 2)}
+{chr(10).join(rows)}
+""")
+    return "".join(out) + f"""
+An impossible clip's check is read back from its manifest entry by `--verify` (shove / one_foot_long: the hold test
+fails, sole IK error ≤ {1000 * SHOVE_IK_MAX:.0f} mm, a raised sole ≥ 8 mm clear; speed: servo lag > {man['bars_from_v7_walking']['rate_lag_rad']} rad; takeoff: the hop
+needs more take-off speed than the legs give; joint_limit: targets clipped at a limit). The table below lists every
+broken clip of the largest dose; `copy` 0 is the smallest dose's set.
+"""
+
+
 def write_doc(lib_dir, out):
     man = json.load(open(os.path.join(lib_dir, "manifest.json")))
     cl = man["clips"]
@@ -853,8 +1224,11 @@ def write_doc(lib_dir, out):
             for t in man["types"]]
     br = [c for c in cl if c.get("contaminant")]
     kinds = collections.Counter((c["feasibility"]["family"], c["contaminant"]) for c in br)
-    brow = [f"| `{c['id']}` | {c['category']} | {c['feasibility']['family']} | {c['contaminant']} | {evidence(c)} |"
-            for c in sorted(br, key=lambda c: (c["feasibility"]["family"] != "impossible", c["contaminant"], c["category"]))]
+    cm = man.get("contamination")
+    brow = [f"| `{c['id']}` | {c['category']} | {c['feasibility']['family']} | {c['contaminant']} |"
+            f"{' ' + str(c.get('copy', 0)) + ' |' if cm else ''} {evidence(c)} |"
+            for c in sorted(br, key=lambda c: (c["feasibility"]["family"] != "impossible", c["contaminant"], c["category"],
+                                               c.get("copy", 0)))]
     crow = [f"| `{c['id']}` | {c['category']} | {c['split']}{' (' + c['new_in'] + ')' if c.get('new_in') else ''} | {describe(c)} | "
             f"{c['check']['peak_joint_speed_rad_s']:.1f} |"
             for t in man["types"] for c in sorted((c for c in cl if c["category"] == t and not c.get("contaminant")),
@@ -862,12 +1236,13 @@ def write_doc(lib_dir, out):
     ntr = sum(c["split"] == "train" for c in cl)
     b = man["bars_from_v7_walking"]
     name, base = os.path.basename(os.path.normpath(lib_dir)), man.get("extended_from")
-    xs = [c for c in cl if c.get("new_in")]
+    xs = [c for c in cl if c.get("new_in") == man["version"]]
     ntest = collections.Counter(c["category"] for c in cl if c["split"] == "test")
     per_test = f"{min(ntest.values())}" if min(ntest.values()) == max(ntest.values()) else "5-12"
     gifs = ("GIFs of every clip, labelled\nwith split and broken kind: [`results/clips_v9/gifs/`](../results/clips_v9/gifs/README.md)."
-            if not base else f"GIFs of the {base} clips (the\nnew test clips have none yet): [`results/clips_v9/gifs/`](../results/clips_v9/gifs/README.md).")
-    ext_txt = "" if not base else (
+            if not base else f"GIFs of the clips_v9 clips (the\nnew {'broken' if cm else 'test'} clips have none yet): "
+            "[`results/clips_v9/gifs/`](../results/clips_v9/gifs/README.md).")
+    ext_txt = "" if not base else contam_txt(man, base, br) if cm else (
         f"""- **Extension of `data/{base}`:** every {base} clip is copied unchanged (same id, index and arrays, checked
   bit for bit by `--verify`); {len(xs)} new clean test clips are appended, marked `"new_in": "{man['version']}"`, 7 per type, one
   variant per new source (sources listed in `GAITS_X` ... `WILD_X` of `make_v9.py`, none equal to any {base} train /
@@ -887,7 +1262,8 @@ the bars apply to keyframed clips only, as in {base}).
 |---|---|---|---|---|---|---|---|
 {chr(10).join(xrow)}
 """
-    doc = f"""# Reference-clip dataset {man['version']}
+    title = ", ".join(dose_name(man, n) for n in cm["doses"]) if cm else man["version"]
+    doc = f"""# Reference-clip dataset{"s" if cm and len(cm["doses"]) > 1 else ""} {title}
 
 Built by `curation/clips/make_v9.py`; this file is written from `data/{name}/manifest.json`
 (`python3 curation/clips/make_v9.py --verify data/{name} --doc docs/{os.path.basename(out)}`). {gifs}
@@ -918,17 +1294,17 @@ Each is a copy of a clean train clip of the same type (`derived_from`), in the t
   (time-compressed until the servo lag exceeds the worst clean v7 walking gait's, {b['rate_lag_rad']} rad),
   one_foot_long (a foot held up 2-3 s off balance; the hold test fails).
 - **corrupted** (by construction, `infeasible: false`): noise (3-8 Hz jitter, 0.07 rad RMS), glitch (3 short pose
-  jumps), foot_skate (the left sole slides 4 cm while marked in contact).
+  jumps), foot_skate ({"a sole slides 3.5-4.5 cm" if cm else "the left sole slides 4 cm"} while marked in contact).
 
 | family | kind | clips |
 |---|---|---|
 {chr(10).join(f"| {f} | {k} | {v} |" for (f, k), v in sorted(kinds.items()))}
-
-| clip | type | family | kind | evidence |
-|---|---|---|---|---|
+{contam_tables(man, br) if cm else ""}
+| clip | type | family | kind |{" copy |" if cm else ""} evidence |
+|---|---|---|---|{"---|" if cm else ""}---|
 {chr(10).join(brow)}
 
-## Generation notes
+{V9C_DEPARTURES if cm else ""}## Generation notes
 
 {chr(10).join(f"- {x}" for x in man['notes']) or "- none"}
 
@@ -947,11 +1323,16 @@ def main():
     p.add_argument("--presets", nargs=2, metavar=("GEN", "OUT"))
     p.add_argument("--gaits")
     p.add_argument("--v7")
-    p.add_argument("--out")
+    p.add_argument("--out", nargs="+", help="one directory (one per --broken N with --contaminate)")
     p.add_argument("--verify")
     p.add_argument("--doc")
     p.add_argument("--extend-test", metavar="V9_DIR", help="v9x: keep this library and append the new test sources")
+    p.add_argument("--contaminate", metavar="V9X_DIR", help="v9c: keep this library and append broken train copies")
+    p.add_argument("--broken", nargs="+", type=int, help="v9c: broken clips per library (multiples of 84)")
+    p.add_argument("--jobs", type=int, default=1, help="v9c: worker processes for the impossible candidates")
     a = p.parse_args()
+    if a.out and not a.contaminate:
+        (a.out,) = a.out
     if a.presets:
         write_presets(*a.presets, ext=bool(a.extend_test))
     elif a.verify:
