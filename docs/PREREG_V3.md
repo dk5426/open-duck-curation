@@ -95,9 +95,9 @@ run; pushes 0.3 / 0.6 m/s and friction × 0.6 at 55% and full; 10 rollouts per c
 | Name | Date |
 |---|---|
 | Dhawal Kabra | 2026-11-19 (in chat) |
-| Kanad Patel | |
-| Neer Patel | |
-| Pierrick Rugery | |
+| Kanad Patel | 2026-11-24 (in person, recorded by Dhawal Kabra; covers amendments to 2026-11-23) |
+| Neer Patel | 2026-11-24 (in person, recorded by Dhawal Kabra; covers amendments to 2026-11-23) |
+| Pierrick Rugery | 2026-11-24 (in person, recorded by Dhawal Kabra; covers amendments to 2026-11-23) |
 
 ## Amendments
 - 2026-11-20, data freeze before any v9 training: `data/clips_v9` at commit c2a07be (`docs/DATASET_V9.md`). 221
