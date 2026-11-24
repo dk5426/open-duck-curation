@@ -152,7 +152,7 @@ def main():
         def row_run(lr, cond, seed):
             if lr == "ppo" and ppo_base:
                 return f"{T}_full_s{seed}" if cond == "full" else f"{T}_{cond}_f{f}_s{seed}"
-            if cond == "full" and seed == 0:
+            if cond == "full" and seed == 0 and (lr != "dagger" or ppo_base):  # DAgger tuned on the base PPO teacher
                 return tune_run(lr, gate[lr]["best"])
             return f"{T}_p2v2_{lr}_{cond}_s{seed}"
 

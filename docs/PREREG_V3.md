@@ -144,3 +144,21 @@ run; pushes 0.3 / 0.6 m/s and friction × 0.6 at 55% and full; 10 rollouts per c
   clips is unchanged and the larger set is secondary); (2) `eval_clips.py` adds fall-free tracking error
   (`score_alive`), action rate, foot slip and base-height error, and a `--dr` evaluation under the training
   randomization; nominal and DR evaluations of every Phase 1 checkpoint on the larger test set are secondary results.
+- 2026-11-23, contamination follow-up (owner's decision), written before any of its runs and after Phase 1 was seen on
+  the same test clips, so it is a **follow-up, not confirmatory**; H1 / H2 and Phases 1-3 are unchanged. It starts after
+  Phase 2 v2 finishes. **Question:** when broken clips measurably harm training, does curation recover the loss better
+  than removing the same number of clips per type at random?
+  - **Libraries:** the same 84 clean train clips, val clips and test clips (`clips_v9x`, 168), with broken clips at 0%,
+    23% (v9's 25), 50% (84) and 75% (252) of train, made by the v9 break generator, balanced across types.
+  - **Conditions:** clean-only, full, random, `curated`, `curatedtn`; PPO, Phase 1 base configuration, 200M steps, 3
+    seeds. Random and both selectors keep the **same number of clips per type**. Scoring policies are retrained on each
+    library (3 seeds, 300M steps).
+  - **Harm check first:** full at 50% and 75%, seed 0, against clean-only on val (10 rollouts, original score). A level
+    goes on only if val e(full) − val e(clean-only) ≥ 0.10; otherwise it is reported as tolerated. If no level passes,
+    the follow-up stops.
+  - **Keep-fraction:** at each level that passes, `curatedtn`'s fraction with the lowest val e over 25, 40, 55, 70, 85%
+    (seed 0), used for every selector and for random. No label is used. The 0% level uses 65%.
+  - **Recovery** = (e(full) − e(curated)) / (e(full) − e(clean-only)), on test.
+  - **Curation helps only if all hold:** (1) harm as above; (2) the selector beats random with the 97.5% source-level
+    CI below 0 on the 168 test clips, Phase 1 drop rule; (3) its absolute gain over full grows with contamination across
+    the levels; (4) at 0% it is not worse than full (CI upper bound ≤ 0.03).
