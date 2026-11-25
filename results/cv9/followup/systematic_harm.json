@@ -1,0 +1,10 @@
+{
+ "rule": "val e(full) - val e(clean-only, 42 clips) >= 0.1",
+ "library": "clips_v9s",
+ "val_e_full": 0.4092493076232218,
+ "val_e_clean_only": 0.40104781513412796,
+ "harm": 0.008201492489093853,
+ "passes": false,
+ "val_e_v9_clean_only_84": 0.36078359419036476,
+ "time": "2026-11-25 12:26"
+}
