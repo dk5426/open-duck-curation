@@ -174,3 +174,24 @@ run; pushes 0.3 / 0.6 m/s and friction × 0.6 at 55% and full; 10 rollouts per c
   clips per type, keep-fraction rule, pass criteria (2) and (4)) at that budget and library, with scoring policies at
   300M steps, recorded in a further amendment before those runs. If neither budget passes, the follow-up ends:
   harm does not appear even with scarce samples.
+- 2026-11-25, budget result and systematic-error follow-up (owner's decision), written after the budget runs and
+  before the new library exists. **Budget result:** val e(full) − val e(clean-only) on `clips_v9c75` is +0.020 at 25M
+  and −0.003 at 50M, so both are tolerated and the budget follow-up ends (`results/cv9/followup/budget_harm.json`).
+  v9's breaks are local defects in copies whose clean source is also in training, so the policy always sees the right
+  motion. **Systematic follow-up** (it tests what trackability curation can miss, not only whether it helps):
+  - **Library `clips_v9s`:** the same val (42) and test (168) clips as `clips_v9x`. In train, 3 of the 6 clean sources
+    of every type (fixed seeded draw) are **replaced** by a systematically wrong version, so no clean twin is left:
+    42 clean + 42 wrong, no other broken clips. The errors are the kind retargeting makes. (a) **Joint offset:** a
+    constant calibration offset of 0.10-0.15 rad on hip pitch, knee or ankle pitch, the same sign on both legs for the
+    whole clip, with the root height re-solved so stance soles stay on the ground. (b) **Foot skate:** every stance
+    foot slides 3-5 cm over each stance phase. Each type gets both kinds as evenly as 3 allows (21 + 21 overall).
+    Every wrong clip must be **feasible**: it passes v9's kinematic, joint-limit and hold checks, so it is trackable
+    and wrong. A clip that fails is re-drawn, and that is recorded.
+  - **Harm check:** PPO, Phase 1 base configuration, 200M steps, seed 0: full (all 84) against clean-only (the 42 clean
+    clips), val (10 rollouts, original score). It passes if val e(full) − val e(clean-only) ≥ 0.10. The v9 clean-only
+    run (84 clips, 0.361) is reported alongside. If it fails, the follow-up ends: systematic errors are tolerated too.
+  - **If it passes:** the 2026-11-23 comparison (conditions, equal clips per type, keep-fraction rule, pass criteria
+    (2) and (4)) on `clips_v9s`, scoring policies at 300M, recorded in an amendment before those runs. We also report
+    each selector's share of wrong clips kept, and the AUC of the scores against the labels.
+  - **Prediction, before any run:** if harm appears, trackability scores separate the wrong clips poorly (AUC < 0.7),
+    because they are trackable.
