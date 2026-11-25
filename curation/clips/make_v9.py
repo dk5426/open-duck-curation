@@ -1264,6 +1264,89 @@ def write_systematic(a, fn, notes, m, d, qadr, T, bars):
     print(f"{a.out}: {len(clips)} clips: {len(clean)} clean + {len(wrong)} wrong train, val / test from {a.systematic}")
 
 
+# ----------------------------------------------------------------------------------------------- v9v: signals
+TURN_TYPES = ["turn_in_place", "walk_turn"]
+SIGNAL_KEYS = ("lin_vel", "ang_vel", "base_pos")  # the only arrays a v9v copy changes
+
+
+def write_signals(base_dir, out):
+    """v9v (PREREG v3 amendment 2026-11-25): the 84 clean train clips of clips_v9x plus one copy of each whose summary
+    signals (observed and rewarded: base linear velocity, yaw rate, base height) disagree with its own unchanged joints,
+    keypoints and contacts. Gaits: linear velocity x0.5 or x2, alternating; turning types: yaw rate (and linear velocity)
+    x0.5 or x2; other types: base height +2 to +4 cm. Constant over the clip. val / test as clips_v9x. Numpy only."""
+    blib = np.load(os.path.join(base_dir, "library.npz"))
+    bman = json.load(open(os.path.join(base_dir, "manifest.json")))
+    bcl = bman["clips"]
+    clean = [c for c in bcl if c["split"] == "train" and not c.get("contaminant")]
+    keep = clean + [c for c in bcl if c["split"] != "train"]
+    rng = np.random.default_rng(SEED + 7)
+    arr = {k: [blib[k][c["index"]] for c in keep] for k in blib.files}
+    clips, n_type = [dict(c, index=i) for i, c in enumerate(keep)], collections.Counter()
+    for c in clean:
+        cat, j = c["category"], n_type[c["category"]]
+        n_type[cat] += 1
+        row = {k: blib[k][c["index"]].copy() for k in blib.files}
+        if cat in GAIT_TYPES:
+            f = (0.5, 2.0)[j % 2]
+            kind, err = ("speed_x2" if f > 1 else "speed_half"), {"lin_vel_scale": f}
+            row["lin_vel"][:, :2] *= np.float32(f)
+            if cat in TURN_TYPES:
+                kind = "turn_x2" if f > 1 else "turn_half"
+                row["ang_vel"][:, 2] *= np.float32(f)
+                err["yaw_rate_scale"] = f
+        else:
+            dz = float(np.round(rng.uniform(0.02, 0.04), 4))
+            kind, err = "height_up", {"base_height_offset_m": dz}
+            row["base_pos"][:, 2] += np.float32(dz)
+        cid = f"{c['id']}__sig_{kind}"
+        clips.append(dict(c, id=cid, source=cid, derived_from=c["id"], contaminant=kind, generator="signal",
+                          index=len(clips), signal_error=err,
+                          feasibility=dict(c["feasibility"], corrupted=True, family="signal", kind=kind)))
+        for k in blib.files:
+            arr[k].append(row[k])
+    kinds = dict(collections.Counter(c["contaminant"] for c in clips if c.get("generator") == "signal"))
+    man = {k: v for k, v in bman.items() if k not in ("clips", "extended_from")}
+    man.update(edited_from=os.path.basename(os.path.normpath(base_dir)), signals=kinds, clips=clips)
+    os.makedirs(out, exist_ok=True)
+    np.savez_compressed(os.path.join(out, "library.npz"), **{k: np.stack(v) for k, v in arr.items()})
+    json.dump(man, open(os.path.join(out, "manifest.json"), "w"), indent=1)
+    json.dump(sorted(c["id"] for c in clean), open(os.path.join(out, "clean_only.json"), "w"), indent=1)
+    print(f"wrote {out}: {len(clips)} clips, {len(clean)} clean + {len(clean)} signal copies {kinds}")
+
+
+def verify_signals(lib_dir, lib, man, cl):
+    """v9v: kept clips are their clips_v9x clips (entry except index, every array bit for bit); every copy equals its
+    clean clip in every array but SIGNAL_KEYS, and differs there exactly by its recorded error."""
+    base_dir = os.path.join(os.path.dirname(os.path.normpath(lib_dir)), man["edited_from"])
+    blib = np.load(os.path.join(base_dir, "library.npz"))
+    B = {c["id"]: c for c in json.load(open(os.path.join(base_dir, "manifest.json")))["clips"]}
+    by_id = {c["id"]: c for c in cl}
+    kept = [c for c in cl if c.get("generator") != "signal"]
+    for c in kept:
+        b = B[c["id"]]
+        assert {k: v for k, v in c.items() if k != "index"} == {k: v for k, v in b.items() if k != "index"}, c["id"]
+        for k in lib.files:
+            assert lib[k][c["index"]].tobytes() == blib[k][b["index"]].tobytes(), (c["id"], k)
+    assert {c["id"] for c in kept if c["split"] != "train"} == {i for i, b in B.items() if b["split"] != "train"}
+    sig = [c for c in cl if c.get("generator") == "signal"]
+    assert len(sig) == sum(1 for c in kept if c["split"] == "train") == 84
+    for c in sig:
+        e, i, j = c["signal_error"], c["index"], by_id[c["derived_from"]]["index"]
+        for k in lib.files:
+            if k not in SIGNAL_KEYS:
+                assert lib[k][i].tobytes() == lib[k][j].tobytes(), (c["id"], k)
+        f, g = e.get("lin_vel_scale", 1.0), e.get("yaw_rate_scale", 1.0)
+        assert np.allclose(lib["lin_vel"][i][:, :2], lib["lin_vel"][j][:, :2] * f, atol=1e-6), c["id"]
+        assert np.array_equal(lib["lin_vel"][i][:, 2], lib["lin_vel"][j][:, 2]), c["id"]
+        assert np.allclose(lib["ang_vel"][i][:, 2], lib["ang_vel"][j][:, 2] * g, atol=1e-6), c["id"]
+        assert np.array_equal(lib["ang_vel"][i][:, :2], lib["ang_vel"][j][:, :2]), c["id"]
+        assert np.array_equal(lib["base_pos"][i][:, :2], lib["base_pos"][j][:, :2]), c["id"]
+        assert np.allclose(lib["base_pos"][i][:, 2] - lib["base_pos"][j][:, 2], e.get("base_height_offset_m", 0.0),
+                           atol=1e-6), c["id"]
+    print(f"  {man['edited_from']}: {len(kept)} clips identical (entry + {len(lib.files)} arrays); {len(sig)} signal "
+          f"copies differ from their clean clip only in {', '.join(SIGNAL_KEYS)}, exactly by their recorded error")
+
+
 # ----------------------------------------------------------------------------------------------- verify and doc
 def verify(lib_dir):
     lib = np.load(os.path.join(lib_dir, "library.npz"))
@@ -1305,6 +1388,8 @@ def verify(lib_dir):
           "no source in two splits")
     if man.get("systematic"):
         return verify_systematic(lib_dir, lib, man, cl)
+    if man.get("signals"):
+        return verify_signals(lib_dir, lib, man, cl)
     if man.get("extended_from"):  # v9x: every base clip unchanged (manifest entry and every array, bit for bit)
         base_dir = os.path.join(os.path.dirname(os.path.normpath(lib_dir)), man["extended_from"])
         blib = np.load(os.path.join(base_dir, "library.npz"))
@@ -1757,7 +1842,10 @@ def main():
     p.add_argument("--broken", nargs="+", type=int, help="v9c: broken clips per library (multiples of 84)")
     p.add_argument("--jobs", type=int, default=1, help="v9c: worker processes for the impossible candidates")
     p.add_argument("--systematic", metavar="V9X_DIR", help="v9s: keep val / test, replace 3 train clips per type by wrong ones")
+    p.add_argument("--signals", metavar="V9X_DIR", help="v9v: clean train + one copy each with inconsistent signals")
     a = p.parse_args()
+    if a.signals:
+        return write_signals(a.signals, *a.out)
     if a.out and not a.contaminate:
         (a.out,) = a.out
     if a.presets:
