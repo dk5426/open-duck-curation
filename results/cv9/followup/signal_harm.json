@@ -1,0 +1,9 @@
+{
+ "rule": "val e(full) - val e(clean-only, the dose check's 84 clips) >= 0.1",
+ "library": "clips_v9v",
+ "val_e_full": 0.34079118207806636,
+ "val_e_clean_only": 0.36078359419036476,
+ "harm": -0.019992412112298408,
+ "passes": false,
+ "time": "2026-11-25 15:34"
+}
