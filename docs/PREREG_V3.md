@@ -162,3 +162,15 @@ run; pushes 0.3 / 0.6 m/s and friction × 0.6 at 55% and full; 10 rollouts per c
   - **Curation helps only if all hold:** (1) harm as above; (2) the selector beats random with the 97.5% source-level
     CI below 0 on the 168 test clips, Phase 1 drop rule; (3) its absolute gain over full grows with contamination across
     the levels; (4) at 0% it is not worse than full (CI upper bound ≤ 0.03).
+- 2026-11-25, harm check result and budget follow-up (owner's decision), written after the harm check and before any
+  budget run. **Harm check:** val e(full) 0.348 at 50% and 0.341 at 75%, against clean-only's 0.361. Both levels are
+  tolerated, so the 2026-11-23 follow-up stops as written (`results/cv9/followup/harm.json`). The 23% dose gap (0.043,
+  seed 0) is within seed spread: full's final val e over seeds 0-2 is 0.404, 0.396 and 0.367. **Budget follow-up:**
+  an untrackable clip can only cost samples, so harm may need a scarce budget. FastTD3, the only learner with a
+  significant gain, trained for 54M env steps. Runs: PPO, Phase 1 base configuration, seed 0, on `clips_v9c75`; full
+  (all 336 train clips) and clean-only (the 84 clean train clips, `results/cv9/dose/clean_only.json`); 25M and 50M env
+  steps; val evaluation (10 rollouts, original score). The bar is the same: a budget goes on only if val e(full) −
+  val e(clean-only) at that budget ≥ 0.10. A budget that passes gets the 2026-11-23 comparison (conditions, equal
+  clips per type, keep-fraction rule, pass criteria (2) and (4)) at that budget and library, with scoring policies at
+  300M steps, recorded in a further amendment before those runs. If neither budget passes, the follow-up ends:
+  harm does not appear even with scarce samples.
