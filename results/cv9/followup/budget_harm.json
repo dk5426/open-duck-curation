@@ -1,0 +1,19 @@
+{
+ "rule": "val e(full) - val e(clean-only) >= 0.1, both at the same budget",
+ "library": "clips_v9c75",
+ "budgets": {
+  "25M": {
+   "val_e_full": 0.49996790197633567,
+   "val_e_clean_only": 0.47949666203487484,
+   "harm": 0.020471239941460828,
+   "passes": false
+  },
+  "50M": {
+   "val_e_full": 0.39634103487644884,
+   "val_e_clean_only": 0.39951063871738457,
+   "harm": -0.0031696038409357308,
+   "passes": false
+  }
+ },
+ "time": "2026-11-25 09:35"
+}
