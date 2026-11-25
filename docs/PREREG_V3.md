@@ -195,3 +195,19 @@ run; pushes 0.3 / 0.6 m/s and friction × 0.6 at 55% and full; 10 rollouts per c
     each selector's share of wrong clips kept, and the AUC of the scores against the labels.
   - **Prediction, before any run:** if harm appears, trackability scores separate the wrong clips poorly (AUC < 0.7),
     because they are trackable.
+- 2026-11-25, systematic result and inconsistent-signal follow-up (owner's decision), written after the systematic run
+  and before the new library exists. **Systematic result:** val e(full) 0.409 against clean-only (42 clips) 0.401, so
+  it is tolerated and the systematic follow-up ends (`results/cv9/followup/systematic_harm.json`). Both are about 0.04
+  above v9's 84-clip clean-only (0.361), so losing correct motions costs more than training on wrong ones. **Signal
+  follow-up:** every earlier bad clip changed the motion that the policy sees in its reference. This test keeps each
+  clip's joints and keypoints and makes the reference's summary signals, which the policy observes and is rewarded
+  on (base linear velocity xy, yaw rate, base height), disagree with its own motion, as a wrong frame rate or ground
+  height in retargeting would.
+  - **Library `clips_v9v`:** val (42) and test (168) as `clips_v9x`. Train is the 84 clean clips plus one corrupted copy
+    of each (84; 50%), identical joints, keypoints and contacts. Gaits: linear velocity ×0.5 or ×2 (alternating).
+    Turning types: yaw rate ×0.5 or ×2, and linear velocity too where it is not zero. Standing types: base height
+    +2 to +4 cm (positive only, so the reset cannot start inside the floor). The change is constant over the clip.
+  - **Harm check:** PPO, Phase 1 base configuration, 200M steps, seed 0, full (168), against the dose check's clean-only
+    run (the same 84 clean clips, same settings; val e 0.361). It passes if val e(full) − 0.361 ≥ 0.10.
+  - **If it passes:** the 2026-11-23 comparison on `clips_v9v`, recorded in an amendment before those runs. **If it
+    fails, the search for harmful clips ends** and the study is written up.
