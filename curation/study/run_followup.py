@@ -6,8 +6,10 @@ Stage harm: PPO (Phase 1 base configuration, 200M steps, seed 0) on every clip o
 evaluation (10 rollouts, original score), and the harm check against the dose check's clean-only run on the same val
 clips: a level goes on only if val e(full) - val e(clean-only) >= HARM (results/<tag>/followup/harm.json).
 Stage budget (amendment 2026-11-25): the same check on clips_v9c75 at BUDGETS env steps, full against clean-only
-trained at the same budget (results/<tag>/followup/budget_harm.json). Skipped where outputs exist, so the driver can
-be restarted.
+trained at the same budget (results/<tag>/followup/budget_harm.json).
+Stage systematic (amendment 2026-11-25): the same check on clips_v9s at 200M, full (42 clean + 42 wrong) against its
+42 clean clips (results/<tag>/followup/systematic_harm.json). Skipped where outputs exist, so the driver can be
+restarted.
 """
 
 import argparse
@@ -32,7 +34,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--gpus", type=int, nargs="+", required=True)
     p.add_argument("--tag", default="cv9")
-    p.add_argument("--stage", default="harm", choices=["harm", "budget"])
+    p.add_argument("--stage", default="harm", choices=["harm", "budget", "systematic"])
     p.add_argument("--steps", type=int, default=200_000_000)
     p.add_argument("--rollouts", type=int, default=10)
     a = p.parse_args()
@@ -60,6 +62,27 @@ def main():
 
     def val_e(path):
         return float(np.mean([v["score"] for v in json.load(open(path))["clips"].values()]))
+
+    if a.stage == "systematic":
+        lib = os.path.join(rs.C, "data", "clips_v9s")
+        val, names = {}, []
+        for cond, clips in (("full", None), ("clean", os.path.join(lib, "clean_only.json"))):
+            val[cond] = os.path.join(OUT, "val", f"v9s_{cond}_s0.json")
+            done = lambda n, g, k=cond: futures.append(pool.submit(evaluate, n, lib, val[k], g))  # noqa: E731
+            names.append(S.submit(f"{a.tag}f_v9s_{cond}_s0", a.steps, prio=0, seed=0, clips=clips,
+                                  env={"CURATION_LIBRARY": lib}, on_done=done))
+        S.wait_for(names)
+        while futures:
+            futures.pop().result()
+        full, clean = val_e(val["full"]), val_e(val["clean"])
+        res = {"val_e_full": full, "val_e_clean_only": clean, "harm": full - clean, "passes": bool(full - clean >= HARM),
+               "val_e_v9_clean_only_84": val_e(os.path.join(P1, "dose", "val_cv9_dose_clean_s0.json"))}
+        json.dump({"rule": f"val e(full) - val e(clean-only, 42 clips) >= {HARM}", "library": "clips_v9s", **res,
+                   "time": time.strftime("%Y-%m-%d %H:%M")},
+                  open(os.path.join(OUT, "systematic_harm.json"), "w"), indent=1)
+        rs.log(f"systematic harm: full {full:.3f} clean {clean:.3f} harm {full - clean:+.3f} "
+               f"{'PASS' if res['passes'] else 'tolerated'}")
+        return
 
     if a.stage == "budget":
         lib, clean_ids = libs["c75"], os.path.join(P1, "dose", "clean_only.json")

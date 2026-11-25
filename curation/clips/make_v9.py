@@ -227,6 +227,10 @@ SEED_C = 90  # noise / glitch draws: np.random.default_rng([SEED_C, type, clip, 
 IMP_FRAC = 16 / 25  # v9's impossible share, kept per copy round
 OFL_LIFTS = ((0.03, 0.025), (0.045, 0.03), (0.06, 0.035))  # one_foot (fwd, up) m, as v9
 CORRUPTED = ("noise", "glitch", "foot_skate")
+# v9s: systematic errors replace their clean train clip (3 of 6 per type, both kinds per type, 21 + 21)
+SEED_S = 91
+SYSTEMATIC = ("joint_offset", "stance_skate")
+OFFSET_J = {"hip_pitch": (2, 11, -1), "knee": (3, 12, 1), "ankle": (4, 13, 1)}  # (left, right, right's sign: hip pitch mirrored)
 
 
 def imp_kinds(cat, e):
@@ -475,7 +479,7 @@ def build_library(a):
         x_src = listed_sources(G, MA, LW, ST, WI, clip_id)
         assert len(set(x_src)) == len(x_src), "a v9x source is listed twice"
         assert not v9_src & set(x_src), sorted(v9_src & set(x_src))
-    splits = ("train",) if a.contaminate else ("train", "val", "test")  # v9c breaks train clips only
+    splits = ("train",) if a.contaminate or a.systematic else ("train", "val", "test")  # v9c / v9s edit train clips only
     for cat in GAIT_TYPES + ["march"]:
         spec = G.get(cat) if cat != "march" else MA
         tcat = "leg_lift" if cat == "march" else cat
@@ -541,7 +545,7 @@ def build_library(a):
         return [(d.site_xpos[s].copy(), d.site_xmat[s].reshape(3, 3).copy()) for s in sites]
 
     Wr = np.array([0.3, 0.3, 0.3])
-    keep_head = bool(a.contaminate)  # v9c: head motion kept in IK-edited copies (see solve_feet), whole holds
+    keep_head = bool(a.contaminate or a.systematic)  # v9c / v9s: head motion kept in IK edits (see solve_feet), whole holds
 
     def solve_feet(q0, pos, quat, tgt, iters=120, q_ref=None):
         """Leg joints that put each sole at its target (world pos, rot) with the base at pos / quat. Seeded from q0 (the
@@ -703,6 +707,105 @@ def build_library(a):
         return (q2, pos, quat, con), {"slide_m": dist, "foot": ("left", "right")[foot], "frames_sliding_in_contact": slid,
                                       "ik_foot_err_mm": round(1000 * worst, 1)}, slid > 10
 
+    # ---- v9s: systematic errors (trackable but wrong; the clip must stay feasible)
+    def stance_runs(c):
+        """[start, end) frames of each stance phase of one foot."""
+        e_ = np.flatnonzero(np.diff(np.r_[0, (c > 0.5).astype(int), 0]))
+        return list(zip(e_[::2], e_[1::2]))
+
+    def stance_skate(base, dist, way="forward"):
+        """Every stance foot slides `dist` (m) the `way` of the heading (forward / back / left / right, the same for both feet)
+        over each of its stance phases (min-jerk) and
+        glides back while it swings, so nothing builds up; a foot that never lifts (standing clips) slides once, over
+        the whole clip. skate() generalised to both feet and every phase; phases under 5 frames are left alone."""
+        q, pos, quat, con = base
+        n = len(q)
+        off = np.zeros((n, 2))
+        for f in range(2):
+            runs = stance_runs(con[:, f])
+            for s_, e_ in runs:
+                if e_ - s_ >= 5:
+                    off[s_:e_, f] = ml.minjerk((np.arange(s_, e_) - s_ + 1) / (e_ - s_))
+            for (_, e0_), (s1, _) in zip(runs, runs[1:]):
+                off[e0_:s1, f] = off[e0_ - 1, f] * (1 - ml.minjerk((np.arange(e0_, s1) - e0_ + 1) / (s1 - e0_)))
+            if runs:
+                off[runs[-1][1]:, f] = off[runs[-1][1] - 1, f]
+        q2, worst = q.copy(), 0.0
+        rot = {"forward": (1, 0), "back": (-1, 0), "left": (0, 1), "right": (0, -1)}[way]
+        for k in range(n):
+            tgt = fk_feet(q[k], pos[k], quat[k])
+            h_ = heading(quat[k])
+            v_ = rot[0] * h_ + rot[1] * np.array([-h_[1], h_[0], 0.0])
+            tgt = [(tgt[f][0] + dist * off[k, f] * v_, tgt[f][1]) for f in range(2)]
+            # seeded from the clean frame, not the previous solved one (as skate() is): a gait's knee passes near zero and
+            # a previous-frame seed can settle on the other knee branch for the rest of the clip (a ~2 rad error)
+            q2[k], err = solve_feet(q[k], pos[k], quat[k], tgt, q_ref=q[k])
+            worst = max(worst, err)
+        nph = sum(1 for f in range(2) for s_, e_ in stance_runs(con[:, f]) if e_ - s_ >= 5)
+        jump = float(np.abs(q2 - q).max())
+        return (q2, pos, quat, con), {"slide_m": dist, "direction": way, "stance_phases_slid": nph,
+                                      "ik_foot_err_mm": round(1000 * worst, 1), "max_joint_change_rad": round(jump, 3)}, \
+            worst <= 0.01 and jump <= 1.0  # v9's skates went to 10.4 mm; > 1 rad = a knee branch flip, not a skate
+
+    def joint_offset(base, joint, amt):
+        """A constant offset `amt` (rad) on one pitch joint of both legs, the same physical direction on both (hip pitch
+        axes are mirrored, knee and ankle are not), for the whole clip; the base is lowered or raised per frame so the
+        stance soles' lowest corners are where the clean clip has them (in flight: the nearest stance frame's shift)."""
+        q, pos, quat, con = base
+        jl, jr, sr = OFFSET_J[joint]
+        q2 = q.copy()
+        q2[:, jl] += amt
+        q2[:, jr] += sr * amt
+        dz = np.full(len(q), np.nan)
+        for k in range(len(q)):
+            low = []
+            for qq in (q[k], q2[k]):
+                d.qpos[:] = home.qpos
+                d.qpos[0:3], d.qpos[3:7], d.qpos[qadr] = pos[k], quat[k], np.clip(qq, lo, hi)
+                mujoco.mj_kinematics(m, d)
+                low.append([sole_low(0), sole_low(1)])
+            st = con[k] > 0.5
+            if st.any():
+                dz[k] = float((np.array(low[0]) - np.array(low[1]))[st].mean())
+        ok_ = np.flatnonzero(np.isfinite(dz))
+        dz = np.interp(np.arange(len(q)), ok_, dz[ok_])
+        pos2 = pos.copy()
+        pos2[:, 2] += dz
+        return (q2, pos2, quat, con), {"joint": joint, "offset_rad": amt, "right_leg_sign": sr,
+                                       "root_dz_mm": [round(1000 * float(dz.min()), 1), round(1000 * float(dz.max()), 1)]}, True
+
+    def stance_slide(q, pos, quat, con):
+        """Mean over stance phases (>= 5 frames) of a sole's horizontal travel (m) from where the phase began."""
+        tr = []
+        for f in range(2):
+            for s_, e_ in stance_runs(con[:, f]):
+                if e_ - s_ >= 5:
+                    xy = np.array([fk_feet(q[k], pos[k], quat[k])[f][0][:2] for k in range(s_, e_)])
+                    tr.append(float(np.linalg.norm(xy - xy[0], axis=1).max()))
+        return float(np.mean(tr)) if tr else 0.0
+
+    def hold_ks(q):
+        """Frames for the hold test: the first, and hold_test.py's (the held pose farthest from home, if the clip has one)."""
+        qd = np.gradient(q, 1 / ml.FPS, axis=0)
+        quiet = np.convolve(np.abs(qd).max(axis=1) < ht.STILL, np.ones(ht.STILL_FRAMES), "same") >= ht.STILL_FRAMES
+        still = np.where(quiet)[0]
+        return [0] + ([int(still[np.argmax(np.abs(q[still] - home.ctrl).sum(axis=1))])] if len(still) else [])
+
+    def feasible(e0, clean, arr):
+        """Feasible = the clean clip's own checks (make_library.check_clip incl. joint-limit margin; servo-lag / balance
+        bars for keyframed clips) and the hold test on every frame where the clean clip holds."""
+        q, pos, quat, con = arr
+        q = np.clip(q, lo, hi)
+        rep, dyn = measure(q, pos, quat, con)
+        ks = hold_ks(clean[0])  # the clean clip's frames, so both clips are tested on the same poses
+        hc = {k: ht.hold(m, d, qadr, clean[0][k], clean[1][k], clean[2][k], clean[3][k]) for k in ks}
+        hw = {k: ht.hold(m, d, qadr, q[k], pos[k], quat[k], con[k]) for k in ks}
+        held = all(hw[k]["held"] for k in ks if hc[k]["held"])
+        f = {"kinematic": rep["pass"], "bars": clean_ok(e0["generator"], rep, dyn), "hold": hw,
+             "hold_clean": {k: v["held"] for k, v in hc.items()}, "held": held}
+        f["pass"] = bool(f["kinematic"] and f["bars"] and held)
+        return (q, pos, quat, con), rep, dyn, f
+
     train = {c: [(e, arr) for e, arr in clips if e["category"] == c and e["split"] == "train"] for c in TYPES}
     used = collections.Counter()
     broken = []
@@ -723,6 +826,10 @@ def build_library(a):
             p2 = dict(prm, **{k_: v if scale == 1 else round(v * scale, 4)})  # v9c scales the push per copy
             yield fam, p2, wild(fam, p2)
 
+    if a.systematic:
+        fn = dict(train=train, skate=stance_skate, offset=joint_offset, feasible=feasible, slide=stance_slide, lo=lo, hi=hi)
+        return write_systematic(a, fn, notes, m, d, qadr, T, {"rate_lag_rad": round(LAG_BAR, 3),
+                                                              "zmp_min_margin_mm": round(ZMP_BAR, 1), "n_gait_clips": len(lags)})
     if a.contaminate:
         fn = dict(train=train, shove=shove, speed=speed, one_foot=one_foot, hold_ss=hold_single_support, noise=noise,
                   glitch=glitch, skate=skate, amplify=amplify, wild=wild, measure=measure, lo=lo, hi=hi)
@@ -1015,6 +1122,148 @@ def write_contaminated(a, fn, notes, m, d, qadr, T, bars):
         print(f"{out}: {N0} clips from {a.contaminate} + {len(sel)} broken copies ({nb} broken with v9's)")
 
 
+def check_regenerated(train, man, base, row, src):
+    """The regenerated clean train clips are the library's, entry and arrays bit for bit (they are what gets edited)."""
+    by_id = {c["id"]: c for c in man["clips"]}
+    for cat in TYPES:
+        assert len(train[cat]) == 6, (cat, len(train[cat]))
+        for e, arr in train[cat]:
+            c = dict(by_id[e["id"]])
+            i = c.pop("index")
+            e_ = json.loads(json.dumps({k: v for k, v in e.items() if not (k == "family" and v is None)}, default=float))
+            assert e_ == c, e["id"]
+            assert all(x.tobytes() == base[k_][i].tobytes() for k_, x in row(*arr).items()), e["id"]
+    print(f"{sum(map(len, train.values()))} regenerated clean train clips identical to {src}")
+
+
+def write_systematic(a, fn, notes, m, d, qadr, T, bars):
+    """v9s: clips_v9x's val and test clips unchanged; in train, 3 of each type's 6 clean clips are REPLACED by a
+    systematically wrong version (no broken clips, none of v9's 25). Joint offsets and stance skates, both in every
+    type (2 + 1 or 1 + 2, 21 + 21), each re-drawn until it is feasible."""
+    import itertools
+    from make_infeasible import arrays
+    base = np.load(os.path.join(a.systematic, "library.npz"))
+    man = json.load(open(os.path.join(a.systematic, "manifest.json")))
+    assert bars == man["bars_from_v7_walking"], (bars, man["bars_from_v7_walking"])
+    train, lo, hi = fn["train"], fn["lo"], fn["hi"]
+
+    def row(q, pos, quat, con):
+        out = {}
+        for k_, x in arrays(m, d, qadr, q, pos, quat, con).items():
+            out[k_] = np.zeros((T,) + x.shape[1:], dtype=base[k_].dtype)
+            out[k_][:len(x)], out[k_][len(x):] = x, x[-1]
+        return out
+
+    check_regenerated(train, man, base, row, a.systematic)
+    rng = np.random.default_rng(SEED_S)
+    # which 3 clips per type: a seeded order of the 3-subsets, those that leave the fewest clean style twins first (a gait
+    # or stationary source has 2 clips, so replacing 3 of 6 leaves at least one twin there; keyframed sources have 1);
+    # the first subset is the draw, a later one is used only if no kind assignment is feasible on it (recorded)
+    pick = {}
+    for cat in TYPES:
+        srcs = [e["source"] for e, _ in train[cat]]
+        twins = lambda sub: sum(1 for j in sub if any(srcs[i] == srcs[j] for i in range(6) if i not in sub))  # noqa: E731
+        subs = [tuple(int(j) for j in sb) for sb in itertools.combinations(range(6), 3)]
+        pick[cat] = sorted((subs[i] for i in rng.permutation(len(subs))), key=twins)  # stable: seeded order within a twin count
+    two_off = set(rng.permutation(len(TYPES))[:len(TYPES) // 2].tolist())  # types with 2 offsets + 1 skate
+    kinds_of = {}
+    for ti, cat in enumerate(TYPES):
+        ks = ["joint_offset", "joint_offset", "stance_skate"] if ti in two_off else ["joint_offset", "stance_skate", "stance_skate"]
+        kinds_of[cat] = rng.permutation(ks).tolist()
+    plan = [(cat, j, k) for cat in TYPES for j, k in zip(pick[cat][0], kinds_of[cat])]
+    # parameters: offsets cycle hip pitch / knee / ankle and the sign, skates the direction; magnitudes drawn (offset
+    # 0.10-0.15 rad, slide 3-5 cm); a re-draw moves to the next joint / sign (offset) or direction (skate)
+    joints = list(OFFSET_J)
+    snotes = []
+
+    def draw(cat, j, kind, i_k):
+        """Draws of one kind on one clip until one is feasible (offset 6, skate 8 = each direction twice); None if none is."""
+        e0, cl0 = train[cat][j]
+        for att in range(6 if kind == "joint_offset" else 8):
+            if kind == "joint_offset":
+                jn, sg = joints[(i_k + att) % 3], (1, -1)[(i_k // 3 + att // 3) % 2]
+                arr, ev, ok = fn["offset"](cl0, jn, sg * round(float(rng.uniform(0.10, 0.15)), 3))
+            else:  # forward / back alternate across clips; re-draws go through the other three directions
+                ways = ["forward", "back"] if i_k % 2 == 0 else ["back", "forward"]
+                arr, ev, ok = fn["skate"](cl0, round(float(rng.uniform(0.03, 0.05)), 3), (ways + ["left", "right"])[att % 4])
+            arr, rep, dyn, fz = fn["feasible"](e0, cl0, arr)
+            if ok and fz["pass"]:
+                return arr, rep, dyn, fz, ev
+            snotes.append(f"{e0['id']} {kind}: draw {att + 1} not feasible ({json.dumps(dict(ev, kinematic=fz['kinematic'], bars=fz['bars'], held=fz['held'], solved=ok), default=str)[:170]}); re-drawn")
+            print("   ", snotes[-1], {k: v.get("why", "held") for k, v in fz["hold"].items()}, flush=True)
+        return None
+
+    # per type: the planned kinds; if a clip has no feasible draw, the type's kinds are re-assigned among its 3 replaced
+    # clips (same clips, same 2 + 1 split) in a fixed order until every clip has one
+    n_k, made, failed = collections.Counter(), [], []
+    for cat in TYPES:
+        k0 = kinds_of[cat]
+        orders = [k0] + [list(o) for o in sorted(set(itertools.permutations(k0))) if list(o) != k0]
+        n0, ok_ = collections.Counter(n_k), False
+        for si, js in enumerate(pick[cat][:8]):
+            for o in orders:
+                n_k, res = collections.Counter(n0), []
+                for j, kind in zip(js, o):
+                    res.append(draw(cat, j, kind, n_k[kind]))
+                    n_k[kind] += 1
+                    if res[-1] is None:
+                        break
+                if len(res) == 3 and all(r is not None for r in res):
+                    ok_ = True
+                    break
+                snotes.append(f"{cat}: kinds {o} on {[train[cat][j][0]['id'] for j in js]} not all feasible; re-assigned")
+            if ok_:
+                break
+            snotes.append(f"{cat}: no feasible kind assignment on clips {[train[cat][j][0]['id'] for j in js]}; clips re-drawn "
+                          "(next subset of the seeded order)")
+        if not ok_:
+            failed.append(cat)
+            continue
+        made += [(cat, j, kind, r) for j, kind, r in zip(js, o, res)]
+    assert not failed, f"no feasible assignment: {failed}"
+    plan = [(c, j, k) for c, j, k, _ in made]
+    wrong = []
+    for cat, j, kind, (arr, rep, dyn, fz, ev) in made:
+        e0, cl0 = train[cat][j]
+        q, pos, quat, con = arr
+        dq = np.abs(q - np.clip(cl0[0], lo, hi))
+        legs = [0, 1, 2, 3, 4, 9, 10, 11, 12, 13]
+        err = {"mean_abs_leg_joint_err_rad": round(float(dq[:, legs].mean()), 4), "max_abs_joint_err_rad": round(float(dq.max()), 4),
+               "stance_slide_cm": round(100 * fn["slide"](q, pos, quat, con), 2),
+               "stance_slide_clean_cm": round(100 * fn["slide"](*cl0), 2),
+               "root_dz_mean_mm": round(1000 * float((pos[:, 2] - cl0[1][:, 2]).mean()), 1)}
+        e = {"id": f"{e0['id']}__sys_{kind}", "category": cat, "source": e0["source"], "replaces": e0["id"], "split": "train",
+             "params": e0["params"], "check": rep, "dynamic": dyn, "length": len(q), "contaminant": kind,
+             "generator": "systematic", "family": e0.get("family"), "systematic": True,
+             "feasibility": {"infeasible": False, "corrupted": True, "family": "systematic", "kind": kind, "kinematic": rep["pass"],
+                             "feasible": fz, "evidence": ev}, "error": err}
+        if e["family"] is None:
+            e.pop("family")
+        wrong.append((json.loads(json.dumps(e, default=float)), row(q, pos, quat, con)))
+        print(f"  {cat:14s} {e['id']:58s} {json.dumps(ev, default=str)[:80]} {err}")
+    assert collections.Counter(k for _, _, k in plan) == {"joint_offset": 21, "stance_skate": 21}
+
+    # rows: clips_v9x's kept clean train, val and test clips in their order (new indices), then the wrong clips
+    gone = {train[c][j][0]["id"] for c, j, _ in plan}
+    keep = [c for c in man["clips"] if not c.get("contaminant") and c["id"] not in gone]
+    lib = {k_: np.concatenate([base[k_][[c["index"] for c in keep]]] + [w[1][k_][None] for w in wrong]) for k_ in wrong[0][1]}
+    lib["length"] = np.concatenate([base["length"][[c["index"] for c in keep]],
+                                    np.array([w[0]["length"] for w in wrong], dtype=base["length"].dtype)])
+    clips = [dict(c, index=i) for i, c in enumerate(keep)] + [dict(w[0], index=len(keep) + i) for i, w in enumerate(wrong)]
+    os.makedirs(a.out, exist_ok=True)
+    np.savez_compressed(os.path.join(a.out, "library.npz"), **lib)
+    clean = sorted(c["id"] for c in keep if c["split"] == "train")
+    manifest = dict(man, version="v9s", edited_from=os.path.basename(os.path.normpath(a.systematic)),
+                    split=man["split"] + "; v9s replaces 3 clean train clips per type by systematically wrong versions and "
+                                         "drops v9's broken clips (make_v9.py --systematic)",
+                    systematic={"seed": SEED_S, "replaced": sorted(gone), "kinds": list(SYSTEMATIC),
+                                "offset_joints": {k: [man["joints"][v[0]], man["joints"][v[1]]] for k, v in OFFSET_J.items()}},
+                    notes=man["notes"] + [f"v9s: {x}" for x in snotes], clips=clips)
+    json.dump(manifest, open(os.path.join(a.out, "manifest.json"), "w"), indent=1, default=float)
+    json.dump(clean, open(os.path.join(a.out, "clean_only.json"), "w"), indent=1)
+    print(f"{a.out}: {len(clips)} clips: {len(clean)} clean + {len(wrong)} wrong train, val / test from {a.systematic}")
+
+
 # ----------------------------------------------------------------------------------------------- verify and doc
 def verify(lib_dir):
     lib = np.load(os.path.join(lib_dir, "library.npz"))
@@ -1054,6 +1303,8 @@ def verify(lib_dir):
     ntr = sum(1 for c in cl if c["split"] == "train")
     print(f"verify OK: {N} clips, train {ntr} ({nb} broken = {100 * nb / ntr:.1f}%), every joint moves in clean train, "
           "no source in two splits")
+    if man.get("systematic"):
+        return verify_systematic(lib_dir, lib, man, cl)
     if man.get("extended_from"):  # v9x: every base clip unchanged (manifest entry and every array, bit for bit)
         base_dir = os.path.join(os.path.dirname(os.path.normpath(lib_dir)), man["extended_from"])
         blib = np.load(os.path.join(base_dir, "library.npz"))
@@ -1077,6 +1328,47 @@ def verify(lib_dir):
         assert not sp & {c["source"] for c in xs}
         print(f"  {man['extended_from']}: {nb_} clips identical (manifest + {len(lib.files)} arrays, bit for bit); "
               f"{len(xs)} new test clips, all pass the clean checks, no source shared with {man['extended_from']}")
+
+
+def verify_systematic(lib_dir, lib, man, cl):
+    """v9s: every clip that is not a wrong version is its clips_v9x clip (entry and arrays bit for bit); val / test are
+    exactly clips_v9x's; 3 wrong per type, each replacing a clean train clip of its type (gone from the library), both
+    kinds in every type, 21 + 21; every wrong clip passes its feasibility checks; clean_only.json = the clean train."""
+    base_dir = os.path.join(os.path.dirname(os.path.normpath(lib_dir)), man["edited_from"])
+    blib = np.load(os.path.join(base_dir, "library.npz"))
+    bcl = {c["id"]: c for c in json.load(open(os.path.join(base_dir, "manifest.json")))["clips"]}
+    assert sorted(blib.files) == sorted(lib.files)
+    same = [c for c in cl if not c.get("systematic")]
+    for c in same:
+        b = bcl[c["id"]]
+        assert {k: v for k, v in c.items() if k != "index"} == {k: v for k, v in b.items() if k != "index"}, c["id"]
+        assert not c.get("contaminant") and all(lib[k][c["index"]].tobytes() == blib[k][b["index"]].tobytes() for k in lib.files), c["id"]
+    for sp in ("val", "test"):
+        assert {c["id"] for c in cl if c["split"] == sp} == {i for i, b in bcl.items() if b["split"] == sp}, sp
+    wr = [c for c in cl if c.get("systematic")]
+    bars = man["bars_from_v7_walking"]
+    for c in wr:
+        b = bcl[c["replaces"]]
+        assert b["split"] == "train" and not b.get("contaminant") and b["category"] == c["category"] and b["source"] == c["source"]
+        assert c["replaces"] not in {x["id"] for x in cl} and c["contaminant"] in SYSTEMATIC and c["split"] == "train"
+        f = c["feasibility"]["feasible"]
+        y = c["dynamic"]
+        bar_ok = b["generator"] != "keyframed" or (y["rate_lag_rad"] <= bars["rate_lag_rad"] + 5e-4 and
+                                                             y["zmp_min_margin_mm"] >= bars["zmp_min_margin_mm"] - 0.05 and not y["takeoff_fail"])
+        held = all(f["hold"][k]["held"] for k, v in f["hold_clean"].items() if v)
+        assert c["check"]["pass"] and c["check"]["joint_limit_margin_rad"] > 0 and f["bars"] and held and f["pass"] and bar_ok, c["id"]
+        assert not c["feasibility"]["infeasible"], c["id"]
+    n = collections.Counter((c["category"], c["contaminant"]) for c in wr)
+    for t in man["types"]:
+        assert sum(1 for c in wr if c["category"] == t) == 3 and all(n[(t, k)] >= 1 for k in SYSTEMATIC), t
+    assert collections.Counter(c["contaminant"] for c in wr) == {k: 21 for k in SYSTEMATIC}
+    clean = sorted(c["id"] for c in cl if c["split"] == "train" and not c.get("systematic"))
+    assert len(clean) == 42 and json.load(open(os.path.join(lib_dir, "clean_only.json"))) == clean
+    h = [row_hash(lib, c["index"]) for c in cl]
+    assert len(set(h)) == len(h), "two clips are the same"
+    print(f"  {man['edited_from']}: {len(same)} clips identical (manifest + {len(lib.files)} arrays, bit for bit), val / test "
+          f"exactly its; {len(wr)} wrong versions (3 per type, both kinds in each, 21 + 21), all feasible; "
+          f"clean_only.json = the {len(clean)} clean train clips; no two clips the same")
 
 
 def verify_contaminated(lib, man, cl, bcl, xs):
@@ -1216,8 +1508,142 @@ broken clip of the largest dose; `copy` 0 is the smallest dose's set.
 """
 
 
+V9S_HANDLING = """## How each type is handled
+
+- **Joint offset** (every type): the same constant offset for the whole clip, on both legs' hip pitch, knee or ankle
+  (the first draw cycles them in that order with the sign; re-draws move on, so the final split is in the table
+  below), 0.10-0.15 rad. Both legs get the same
+  physical direction: the hip pitch axes are mirrored in the model (left -y, right +y), so the right hip pitch gets the
+  opposite joint-space sign; knee and ankle axes are not mirrored. The base is raised or lowered per frame so each stance
+  sole's lowest corner is where the clean clip has it (mean of the stance feet; frames with no stance foot, a hop's
+  flight, take the nearest stance frame's shift). Standing types (crouch, bow, sway, head, dance, headbang, twist) have
+  one whole-clip stance phase, so the offset is a constant posture error with the base re-seated; gaits, leg lifts and
+  hops get it through every step. The offset also tilts the soles and moves the feet under the base, so some stance
+  slip comes with it (the `stance slide` column).
+- **Stance skate** (every type): each stance foot slides 3-5 cm over each stance phase of at least 5 frames
+  (min-jerk), and glides back while it swings, so no offset builds up between steps (`skate()` generalised to both feet
+  and every phase; IK as v9's but seeded from the clean frame, sole error ≤ 10 mm, the largest v9's skates reached,
+  and no joint more than 1 rad from the clean clip, which rejects a knee-branch flip; head joints kept). The first
+  draw slides forward or back (alternating across clips) along the heading; re-draws try the other of the two, then
+  left and right (both feet the same way). On some gait clips no direction is feasible (forward runs a leg into a
+  joint limit, the others out of reach); then the kinds are re-assigned or other clips drawn (see the notes). In standing clips both feet
+  never lift, so each slides once, slowly, over the whole clip: the feet creep out from under a still base. Hops slide
+  in each ground phase between flights.
+- **Feasible** = the checks the clean clip passed: `make_library.check_clip` (joint-limit margin > 0, stance soles within
+  5 mm, foot gap), the servo-lag / balance / take-off bars for keyframed clips, and the hold test on the clean clip's
+  hold frames (the first frame, and hold_test.py's held pose when the clip has one) wherever the clean clip holds. A
+  failed draw is re-drawn (offset: next joint / sign, new size; skate: next direction, new size; up to 6 / 8 draws)
+  and recorded below. If a clip has no feasible draw of its kind, the type's kinds are re-assigned among its 3 replaced
+  clips (same clips, same 2 + 1 split, next order), also recorded.
+- **Which clips:** a seeded draw (seed 91) per type among the 3-of-6 choices that leave the fewest clean style twins
+  (a seeded order of the choices, fewest twins first; the first is the draw). Gait and stationary sources have two
+  clips (two styles), so one twin per type is unavoidable there; leg_lift (2 march pairs + stomp + kick) and the
+  keyframed types have none. If no kind assignment is feasible on the drawn clips, the next choice in the order is
+  used (recorded). Which 7 types get 2 offsets + 1 skate is seeded too.
+"""
+
+
+def write_doc_systematic(lib_dir, out):
+    """v9s doc: contents, how each type is handled, feasibility, error sizes, the wrong clips, notes, clean clips."""
+    man = json.load(open(os.path.join(lib_dir, "manifest.json")))
+    cl = man["clips"]
+    wr = [c for c in cl if c.get("systematic")]
+    n = collections.Counter((c["category"], c["split"], c.get("contaminant")) for c in cl)
+    rows = [f"| {t} | {n[(t, 'train', None)]} | {n[(t, 'train', 'joint_offset')]} | {n[(t, 'train', 'stance_skate')]} | "
+            f"{n[(t, 'val', None)]} | {n[(t, 'test', None)]} |" for t in man["types"]]
+    fz = [c["feasibility"]["feasible"] for c in wr]
+    held_n = sum(all(f["hold"][k]["held"] for k, v in f["hold_clean"].items() if v) for f in fz)
+    clean_fail = sum(1 for f in fz for v in f["hold_clean"].values() if not v)
+    def stats(kind):
+        e = [c["error"] for c in wr if c["contaminant"] == kind]
+        mean = lambda k: np.mean([x[k] for x in e])  # noqa: E731
+        return (f"| {kind} | {len(e)} | {mean('mean_abs_leg_joint_err_rad'):.3f} | {mean('max_abs_joint_err_rad'):.3f} | "
+                f"{mean('stance_slide_clean_cm'):.2f} | {mean('stance_slide_cm'):.2f} | {mean('root_dz_mean_mm'):+.1f} |")
+    def par(c):
+        ev = c["feasibility"]["evidence"]
+        if c["contaminant"] == "joint_offset":
+            return f"{ev['joint']} {ev['offset_rad']:+.3f} rad; base {ev['root_dz_mm'][0]:+.1f} to {ev['root_dz_mm'][1]:+.1f} mm"
+        return f"slide {100 * ev['slide_m']:.1f} cm {ev['direction']} over {ev['stance_phases_slid']} stance phases"
+    wrow = [f"| `{c['id']}` | {c['category']} | {c['contaminant']} | {par(c)} | {c['error']['mean_abs_leg_joint_err_rad']:.3f} | "
+            f"{c['error']['stance_slide_clean_cm']:.2f} → {c['error']['stance_slide_cm']:.2f} | "
+            f"{', '.join(f'{k}: ' + ('holds' if v['held'] else v['why']) for k, v in c['feasibility']['feasible']['hold'].items())} |"
+            for c in sorted(wr, key=lambda c: (man["types"].index(c["category"]), c["contaminant"], c["id"]))]
+    crow = [f"| `{c['id']}` | {c['category']} | {c['split']}{' (' + c['new_in'] + ')' if c.get('new_in') else ''} | {describe(c)} | "
+            f"{c['check']['peak_joint_speed_rad_s']:.1f} |"
+            for t in man["types"] for c in sorted((c for c in cl if c["category"] == t and not c.get("systematic")),
+                                                    key=lambda c: (("train", "val", "test").index(c["split"]), c["id"]))]
+    name, base = os.path.basename(os.path.normpath(lib_dir)), man["edited_from"]
+    vnotes = [x for x in man["notes"] if x.startswith("v9s: ")]
+    doc = f"""# Reference-clip dataset {man['version']}
+
+Built by `curation/clips/make_v9.py --systematic`; this file is written from `data/{name}/manifest.json`
+(`python3 curation/clips/make_v9.py --verify data/{name} --doc docs/{os.path.basename(out)}`). The systematic-error
+follow-up of PREREG_V3 (amendment of 2026-11-25). No GIFs yet.
+
+## Contents
+
+- **{len(cl)} clips**, 50 Hz, at most 4 s. Train / val / test: **{sum(c['split'] == 'train' for c in cl)} /
+  {sum(c['split'] == 'val' for c in cl)} / {sum(c['split'] == 'test' for c in cl)}**.
+- **Val and test are exactly `data/{base}`'s** (same ids and entries, arrays bit for bit; checked by `--verify`).
+- **Train = {len(cl) - len(wr) - sum(c['split'] != 'train' for c in cl)} clean + {len(wr)} wrong.** In every type, 3 of the 6 clean train clips are **replaced** by a
+  systematically wrong version (`"systematic": true`, `contaminant` = the kind, `replaces` = the clean clip, which is
+  not in the library; `source` stays the clean clip's). The other 3 are {base}'s clips, bit for bit. None of v9's 25
+  broken clips is in the library. Wrong clips are `feasibility.infeasible: false, corrupted: true, family:
+  "systematic"`, so tools that count `contaminant` count them.
+- `data/{name}/clean_only.json` lists the {len(cl) - len(wr) - sum(c['split'] != 'train' for c in cl)} clean train ids (the format of `results/cv9/dose/clean_only.json`).
+- Row order: {base}'s kept clips in their order, then the wrong clips (indices differ from {base}'s; match by id).
+
+| type | train clean | joint_offset | stance_skate | val | test |
+|---|---|---|---|---|---|
+{chr(10).join(rows)}
+| **all** | **{sum(1 for c in cl if c['split'] == 'train' and not c.get('systematic'))}** | **{sum(c['contaminant'] == 'joint_offset' for c in wr)}** | **{sum(c['contaminant'] == 'stance_skate' for c in wr)}** | **{sum(c['split'] == 'val' for c in cl)}** | **{sum(c['split'] == 'test' for c in cl)}** |
+
+{V9S_HANDLING}
+## Feasibility
+
+Of {len(wr)} wrong clips: kinematic check (incl. joint-limit margin) **{sum(f['kinematic'] for f in fz)} / {len(wr)}**, keyframed bars
+**{sum(f['bars'] for f in fz)} / {len(wr)}** (they apply to keyframed clips only), hold test where the clean clip holds **{held_n} / {len(wr)}**
+({sum(len(f['hold']) for f in fz)} hold frames), all three **{sum(f['pass'] for f in fz)} / {len(wr)}**. {sum('not feasible' in x for x in vnotes)} draws were re-drawn and
+{sum('re-assigned' in x for x in vnotes)} kind assignments / {sum('clips re-drawn' in x for x in vnotes)} clip choices replaced (listed under Generation notes); {clean_fail} hold frames where the
+clean clip itself does not hold were not required.
+
+Parameters kept: joint_offset on {', '.join(f"{k} {v}" for k, v in sorted(collections.Counter(c['feasibility']['evidence']['joint'] for c in wr if c['contaminant'] == 'joint_offset').items()))}
+(sign + {sum(c['feasibility']['evidence']['offset_rad'] > 0 for c in wr if c['contaminant'] == 'joint_offset')}, − {sum(c['feasibility']['evidence']['offset_rad'] < 0 for c in wr if c['contaminant'] == 'joint_offset')}); stance_skate {', '.join(f"{k} {v}" for k, v in sorted(collections.Counter(c['feasibility']['evidence']['direction'] for c in wr if c['contaminant'] == 'stance_skate').items()))}.
+
+## Error size
+
+Against the clean clip each replaces (mean over the clips of each kind): leg-joint error = mean |Δq| over the 10 leg
+joints and all frames; stance slide = mean over stance phases of a sole's horizontal travel from where the phase began.
+
+| kind | clips | mean leg-joint error (rad) | max joint error (rad) | stance slide, clean (cm) | stance slide, wrong (cm) | base height change (mm) |
+|---|---|---|---|---|---|---|
+{stats('joint_offset')}
+{stats('stance_skate')}
+
+## Wrong clips
+
+| clip | type | kind | parameters | leg-joint error (rad) | stance slide (cm) | hold test (frame: result) |
+|---|---|---|---|---|---|---|
+{chr(10).join(wrow)}
+
+## Generation notes
+
+{chr(10).join(f"- {x[5:]}" for x in vnotes) or "- none (every first draw was feasible)"}
+
+## Clean clips
+
+| clip | type | split | parameters | peak joint speed (rad/s) |
+|---|---|---|---|---|
+{chr(10).join(crow)}
+"""
+    open(out, "w").write(doc)
+    print("wrote", out)
+
+
 def write_doc(lib_dir, out):
     man = json.load(open(os.path.join(lib_dir, "manifest.json")))
+    if man.get("systematic"):
+        return write_doc_systematic(lib_dir, out)
     cl = man["clips"]
     n = collections.Counter((c["category"], c["split"], bool(c.get("contaminant"))) for c in cl)
     rows = [f"| {t} | {n[(t, 'train', False)]} | {n[(t, 'train', True)]} | {n[(t, 'val', False)]} | {n[(t, 'test', False)]} |"
@@ -1330,6 +1756,7 @@ def main():
     p.add_argument("--contaminate", metavar="V9X_DIR", help="v9c: keep this library and append broken train copies")
     p.add_argument("--broken", nargs="+", type=int, help="v9c: broken clips per library (multiples of 84)")
     p.add_argument("--jobs", type=int, default=1, help="v9c: worker processes for the impossible candidates")
+    p.add_argument("--systematic", metavar="V9X_DIR", help="v9s: keep val / test, replace 3 train clips per type by wrong ones")
     a = p.parse_args()
     if a.out and not a.contaminate:
         (a.out,) = a.out
