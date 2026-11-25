@@ -211,3 +211,16 @@ run; pushes 0.3 / 0.6 m/s and friction × 0.6 at 55% and full; 10 rollouts per c
     run (the same 84 clean clips, same settings; val e 0.361). It passes if val e(full) − 0.361 ≥ 0.10.
   - **If it passes:** the 2026-11-23 comparison on `clips_v9v`, recorded in an amendment before those runs. **If it
     fails, the search for harmful clips ends** and the study is written up.
+- 2026-11-25, signal result and backward-knee test (owner's decision), written after the signal run and before the
+  knee run. **Signal result:** val e(full) 0.341 against clean-only's 0.361, so it is tolerated
+  (`results/cv9/followup/signal_harm.json`). **Finding:** 30 of the 294 clips labelled clean in `clips_v9x` (6 train,
+  6 val, 18 test; 25 of them gentle-style gaits) bend a knee past straight to the other side (knee < 0 rad, against
+  about +1.3 standing) for at least 20 of their frames. This comes from the gait generator, not from v9's breaks, and
+  the kinematic check passes them because the knee range is ±1.57 rad. Every test fall of every Phase 1 and Phase 2
+  run is on these 18 test clips, and all 4 val clips that always fall are among the 6 val ones. **Knee test:** PPO,
+  Phase 1 base configuration, 200M steps, seed 0, on the 78 clean train clips without the 6 backward-knee ones
+  (`results/cv9/followup/knee_removed.json`), against the dose check's clean-only run (all 84). **Primary:** val e on
+  the 36 val clips without the backward-knee ones. It passes if val e(84) − val e(78) ≥ 0.10, the bar of every
+  earlier harm check. One seed cannot resolve differences below about 0.04, which is the seed spread of full on v9.
+  **Secondary:** test e of both runs on the 150 test clips without the backward-knee ones, and on the 18 with them.
+  Separately, results on the 150 clean test clips will be reported for Phases 1 and 2 as a secondary analysis.

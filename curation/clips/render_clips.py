@@ -28,6 +28,8 @@ def main():
     p.add_argument("--cols", type=int, default=2)
     p.add_argument("--cam-z", type=float, default=0.12, help="camera look-at height (m)")
     p.add_argument("--cam-dist", type=float, default=0.75, help="camera distance (m)")
+    p.add_argument("--cam-azim", type=float, default=135.0, help="camera azimuth (deg; 90 = side view)")
+    p.add_argument("--cam-elev", type=float, default=-18.0, help="camera elevation (deg)")
     p.add_argument("--tile", type=int, nargs=2, default=(300, 260), metavar=("W", "H"), help="tile size (px)")
     p.add_argument("--step", type=int, default=2, help="render every n-th frame (GIF plays at 50/n fps)")
     p.add_argument("--colors", type=int, default=128)
@@ -50,7 +52,7 @@ def main():
     r = mujoco.Renderer(m, H, W)
     cam = mujoco.MjvCamera()
     cam.type = mujoco.mjtCamera.mjCAMERA_FREE
-    cam.distance, cam.elevation, cam.azimuth = a.cam_dist, -18.0, 135.0
+    cam.distance, cam.elevation, cam.azimuth = a.cam_dist, a.cam_elev, a.cam_azim
     font = ImageFont.truetype("DejaVuSans-Bold.ttf", 12)
     small = ImageFont.truetype("DejaVuSans.ttf", 11)
     home_z = m.keyframe("home").qpos[2]
