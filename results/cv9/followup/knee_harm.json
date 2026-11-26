@@ -1,0 +1,53 @@
+{
+ "rule": "val e(84) - val e(78), val without backward-knee clips, >= 0.1",
+ "backward_knee": {
+  "criterion": "either knee < 0 rad on >= 20 frames",
+  "ids": [
+   "side_step__dx0_dy-0.0175_dth0__gentle",
+   "side_step__dx0_dy-0.019_dth0__gentle",
+   "side_step__dx0_dy-0.025_dth0__gentle",
+   "side_step__dx0_dy-0.03_dth0__gentle",
+   "side_step__dx0_dy0.0135_dth0__gentle",
+   "side_step__dx0_dy0.016_dth0__gentle",
+   "side_step__dx0_dy0.025_dth0__gentle",
+   "side_step__dx0_dy0.0275_dth0__gentle",
+   "turn_in_place__dx0_dy0_dth-0.15__gentle",
+   "turn_in_place__dx0_dy0_dth-0.175__gentle",
+   "turn_in_place__dx0_dy0_dth-0.20__normal",
+   "turn_in_place__dx0_dy0_dth-0.25__gentle",
+   "turn_in_place__dx0_dy0_dth0.16__gentle",
+   "turn_in_place__dx0_dy0_dth0.19__gentle",
+   "turn_in_place__dx0_dy0_dth0.20__gentle",
+   "walk_fwd__dx0.035_dy0_dth0__gentle",
+   "walk_fwd__dx0.04_dy0_dth0__gentle",
+   "walk_fwd__dx0.055_dy0_dth0__gentle",
+   "walk_fwd__dx0.05_dy0_dth0__gentle",
+   "walk_turn__dx0.025_dy0_dth-0.10__gentle",
+   "walk_turn__dx0.025_dy0_dth-0.18__normal",
+   "walk_turn__dx0.02_dy0_dth-0.15__normal",
+   "walk_turn__dx0.02_dy0_dth0.15__gentle",
+   "walk_turn__dx0.035_dy0_dth-0.12__gentle",
+   "walk_turn__dx0.035_dy0_dth0.08__gentle",
+   "walk_turn__dx0.03_dy0_dth-0.13__gentle",
+   "walk_turn__dx0.03_dy0_dth-0.15__gentle",
+   "walk_turn__dx0.03_dy0_dth-0.15__normal",
+   "walk_turn__dx0.03_dy0_dth0.06__gentle",
+   "walk_turn__dx0.04_dy0_dth-0.15__normal"
+  ]
+ },
+ "runs": {
+  "78": {
+   "val_e_clean": 0.2858996073197987,
+   "test_e_clean": 0.286507679015398,
+   "test_e_knee": 0.9065473359492091
+  },
+  "84": {
+   "val_e_clean": 0.2787202815007832,
+   "test_e_clean": 0.28089281966288887,
+   "test_e_knee": 0.7192316535446378
+  }
+ },
+ "harm": -0.007179325819015481,
+ "passes": false,
+ "time": "2026-11-25 19:12"
+}
