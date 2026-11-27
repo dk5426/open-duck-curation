@@ -248,3 +248,26 @@ run; pushes 0.3 / 0.6 m/s and friction × 0.6 at 55% and full; 10 rollouts per c
   plausible but not certain. **Secondary:** test e of both runs on the 168 test clips, and the keypoint and leg
   components of e on val and test. If it passes, a curation comparison on `clips_v9a` gets its own amendment first.
   If it is tolerated, we report that this policy tolerates even aliased defects at this size.
+- 2026-11-27, alias result and curation on the aliased library (owner's decision), written after the alias run and
+  before any scoring of `clips_v9a`'s train clips or any curation run. **Alias result:** val e 0.397 against
+  clean-only's 0.361, so harm is +0.036, tolerated by the 0.10 bar (`results/cv9/followup/alias_harm.json`). It is
+  the first systematic harm, though: keypoint error rises on 41 of the 42 val clips (2.00 → 2.76 mm) and on all 168
+  test clips (1.83 → 2.67 mm), while joint error is unchanged. The keypoint term accounts for the whole rise in e
+  (+0.038 val, +0.042 test). **Test:**
+  - The alias run (all 168 train clips) scores every train clip (10 rollouts).
+  - **Type-normalised curation** ranks clips by score_v3 divided by the median score_v3 of the scorer's own clean
+    val clips of the same type (Phase 1's v9 definition, grouped by type) and keeps 84 of the 168 (50%, as many clips
+    as there are clean ones).
+  - **Random** draws 84 uniformly (seed 1000).
+  - Both subsets use Phase 1's coverage rule, then train PPO on the Phase 1 base configuration for 200M steps, seed
+    0, on GPUs 1 and 2, scored on val and on the 168 test clips.
+
+  Plain (global-rank) curation is not run. Phase 1 showed it drops hard types first, and here the copies of the
+  cheap static types score better than the clean gaits, so it would test type balance rather than the copies.
+  **Primary:** test e on the 168 test clips. Curation helps if the 97.5% clip-bootstrap CI of mean(e(random) −
+  e(curatedtn)) is above 0. **Secondary:** the same on val, the same for the keypoint component, the number of
+  aliased copies each subset keeps, and both subsets against the two references already run, all 168 (the alias
+  run) and the 84 clean ones (the dose check's clean-only run). **Prediction:** random keeps about 42 copies, and
+  type-normalised curation keeps far fewer, because a copy and its clean twin act alike but the copy's keypoint
+  targets are missed. If so, curation should recover most of the 0.8 mm keypoint rise and about 0.02 to 0.04 of e on
+  test. One seed resolves about 0.02 on 168 test clips, so a real but small effect can still come out "no gain".

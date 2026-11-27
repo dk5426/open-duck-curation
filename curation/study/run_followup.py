@@ -15,6 +15,9 @@ Stage knee (amendment 2026-11-25): the 78 clean clips without the backward-knee 
 (results/<tag>/followup/knee_harm.json).
 Stage alias (amendment 2026-11-26): as signal, on clips_v9a (84 clean + 84 copies the policy cannot tell from them that
 reward other feet keypoints and contacts), plus both runs on the 168 test clips (results/<tag>/followup/alias_harm.json).
+Stage aliascur (amendment 2026-11-27): the alias run scores every clips_v9a train clip; type-normalised curation and a
+random draw each keep 84 of 168; test e(random) - test e(curatedtn) with a 97.5% clip-bootstrap CI
+(results/<tag>/followup/alias_curation.json).
 Skipped where
 outputs exist, so the driver can be restarted.
 """
@@ -42,7 +45,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--gpus", type=int, nargs="+", required=True)
     p.add_argument("--tag", default="cv9")
-    p.add_argument("--stage", default="harm", choices=["harm", "budget", "systematic", "signal", "knee", "alias"])
+    p.add_argument("--stage", default="harm", choices=["harm", "budget", "systematic", "signal", "knee", "alias", "aliascur"])
     p.add_argument("--steps", type=int, default=200_000_000)
     p.add_argument("--rollouts", type=int, default=10)
     a = p.parse_args()
@@ -70,6 +73,66 @@ def main():
 
     def val_e(path):
         return float(np.mean([v["score"] for v in json.load(open(path))["clips"].values()]))
+
+    if a.stage == "aliascur":
+        sys.path.insert(0, os.path.join(rs.C, "curation", "analysis"))
+        import compare_conditions as cc
+        from run_curve import with_coverage
+        lib = os.path.join(rs.C, "data", "clips_v9a")
+        man = json.load(open(os.path.join(lib, "manifest.json")))
+        cat = {c["id"]: c["category"] for c in man["clips"]}
+        copy = {c["id"]: c.get("generator") == "aliased" for c in man["clips"]}
+        tid = sorted(c["id"] for c in man["clips"] if c["split"] == "train")
+        judged = {c["category"] for c in man["clips"] if c["split"] in ("val", "test")}
+        # scorer: the alias stage's run on all 168 train clips; type-normalised score as Phase 1 (score_v3 over the
+        # median of the clean val clips of the clip's type, the scorer's own val evaluation)
+        scorer, sc = f"{a.tag}f_v9a_full_s0", os.path.join(OUT, "scores", "v9a_train_s0.json")
+        os.makedirs(os.path.dirname(sc), exist_ok=True)
+        evaluate(scorer, lib, sc, a.gpus[0], "train")
+        tr, vv = json.load(open(sc))["clips"], json.load(open(os.path.join(OUT, "val", "v9a_full_s0.json")))["clips"]
+        med = {t: float(np.median([v["score_v3"] for i, v in vv.items() if cat[i] == t])) for t in judged}
+        tn = {i: tr[i]["score_v3"] / med[cat[i]] for i in tid}
+        n = len(tid) // 2
+        subs = {"tn50": with_coverage(sorted(tid, key=lambda i: (tn[i], i)), n, cat, judged),
+                "rand50": with_coverage(list(np.random.default_rng(1000).permutation(tid)), n, cat, judged)}
+        val, test, names = {}, {}, []
+        for k, ids in subs.items():
+            path = os.path.join(OUT, f"v9a_{k}.json")
+            json.dump(ids, open(path, "w"), indent=1)
+            rs.log(f"subset v9a_{k}: {len(ids)} clips, aliased copies {sum(copy[i] for i in ids)}/84")
+            val[k], test[k] = os.path.join(OUT, "val", f"v9a_{k}_s0.json"), os.path.join(OUT, "test", f"v9a_{k}_s0.json")
+
+            def done(nm, g, k=k):
+                futures.append(pool.submit(evaluate, nm, lib, val[k], g))
+                futures.append(pool.submit(evaluate, nm, lib, test[k], g, "test"))
+            names.append(S.submit(f"{a.tag}f_v9a_{k}_s0", a.steps, prio=0, seed=0, clips=path,
+                                  env={"CURATION_LIBRARY": lib}, on_done=done))
+        S.wait_for(names)
+        while futures:
+            futures.pop().result()
+        # references already run: all 168 (alias stage) and the 84 clean clips (the dose check's clean-only run)
+        val.update(full=os.path.join(OUT, "val", "v9a_full_s0.json"), clean=os.path.join(P1, "dose", "val_cv9_dose_clean_s0.json"))
+        test.update(full=os.path.join(OUT, "test", "v9a_full_s0.json"), clean=os.path.join(OUT, "test", "knee84_s0.json"))
+        cc.CI = 97.5
+        rng = np.random.default_rng(0)
+        res = {"copies_kept": {k: sum(copy[i] for i in ids) for k, ids in subs.items()}, "n_clips": n}
+        for split, files in (("test", test), ("val", val)):
+            R = {k: json.load(open(f))["clips"] for k, f in files.items()}
+            ids = sorted(R["tn50"])
+            for m in ("score", "keypoints"):
+                res[f"{split}_{m}"] = {k: float(np.mean([r[i][m] for i in ids])) for k, r in R.items()}
+                lo, hi = cc.boot_ci([[R["rand50"][i][m]] for i in ids], [[R["tn50"][i][m]] for i in ids], rng)
+                res[f"{split}_{m}_random_minus_curatedtn"] = {"mean": res[f"{split}_{m}"]["rand50"] - res[f"{split}_{m}"]["tn50"],
+                                                              "ci97.5": [lo, hi]}
+        d = res["test_score_random_minus_curatedtn"]
+        res["curation_helps"] = bool(d["ci97.5"][0] > 0)
+        json.dump({"rule": "curation helps if the 97.5% clip-bootstrap CI of test e(random) - test e(curatedtn) is above 0",
+                   "library": "clips_v9a", **res, "time": time.strftime("%Y-%m-%d %H:%M")},
+                  open(os.path.join(OUT, "alias_curation.json"), "w"), indent=1)
+        rs.log(f"alias curation: test e random {res['test_score']['rand50']:.3f} curatedtn {res['test_score']['tn50']:.3f} "
+               f"diff {d['mean']:+.3f} CI [{d['ci97.5'][0]:+.3f}, {d['ci97.5'][1]:+.3f}] "
+               f"{'HELPS' if res['curation_helps'] else 'no gain'}; copies kept {res['copies_kept']}")
+        return
 
     if a.stage == "knee":
         lib = os.path.join(rs.C, "data", "clips_v9x")
