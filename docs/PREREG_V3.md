@@ -224,3 +224,27 @@ run; pushes 0.3 / 0.6 m/s and friction × 0.6 at 55% and full; 10 rollouts per c
   earlier harm check. One seed cannot resolve differences below about 0.04, which is the seed spread of full on v9.
   **Secondary:** test e of both runs on the 150 test clips without the backward-knee ones, and on the 18 with them.
   Separately, results on the 150 clean test clips will be reported for Phases 1 and 2 as a secondary analysis.
+- 2026-11-26, knee result and aliasing test (owner's decision), written after the knee run and before the aliased
+  library or its run. **Knee result:** val e on the 36 val clips without backward-knee clips is 0.279 with all 84
+  clean train clips and 0.286 without the 6 backward-knee ones, so harm is −0.007, tolerated
+  (`results/cv9/followup/knee_harm.json`). On the 18 backward-knee test clips, training with them gives 0.719 and
+  without them 0.907. **Why another test:** every bad clip so far changed a channel the policy observes (the reference
+  joints, their preview, base velocity, yaw rate, height), so the policy could tell each one from its clean source and
+  learn it separately. Harm needs the opposite: a clip identical to a clean one in every observed channel that rewards
+  something else (aliasing). Four rewarded reference signals are never observed: keypoints, contacts, orientation,
+  and the per-clip tolerances derived from them. **Library `clips_v9a`** (`make_v9.py --aliased`): the 84 clean
+  train clips of `clips_v9x` plus one copy of each. Every array of a copy is bit for bit its clean clip's except:
+  - both foot keypoints are shifted forward in the body frame by d, set per clip so that tracking the clean motion
+    misses the copy's keypoint target by σ/√2 under the copy's own tolerance, where the Gaussian reward is steepest
+    (d = 7 to 32 mm, median 13 mm);
+  - the left and right contact labels are swapped.
+
+  Orientation is left out, because the env also spawns the robot at the reference orientation, which would make a
+  copy observable. Val and test are `clips_v9x`'s, all clean. **Run:** PPO, Phase 1 base configuration, 200M steps,
+  seed 0, on all 168 train clips, against the dose check's clean-only run (84). **Primary:** val e on the 42 val
+  clips. It passes if val e(v9a) − val e(clean-only) ≥ 0.10, the bar of every earlier harm check. **Prediction:** if
+  the policy splits the difference between each clean clip and its copy, the feet shift about d/2 on clean clips.
+  The keypoint term alone then adds about d/5 / 0.02 to e (+0.07 to +0.16), plus joint error, so a pass is
+  plausible but not certain. **Secondary:** test e of both runs on the 168 test clips, and the keypoint and leg
+  components of e on val and test. If it passes, a curation comparison on `clips_v9a` gets its own amendment first.
+  If it is tolerated, we report that this policy tolerates even aliased defects at this size.

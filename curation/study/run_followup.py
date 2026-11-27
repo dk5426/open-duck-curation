@@ -10,7 +10,12 @@ trained at the same budget (results/<tag>/followup/budget_harm.json).
 Stage systematic (amendment 2026-11-25): the same check on clips_v9s at 200M, full (42 clean + 42 wrong) against its
 42 clean clips (results/<tag>/followup/systematic_harm.json).
 Stage signal (amendment 2026-11-25): full on clips_v9v (84 clean + 84 copies with inconsistent signals) at 200M against
-the dose check's clean-only run on the same 84 clean clips (results/<tag>/followup/signal_harm.json). Skipped where
+the dose check's clean-only run on the same 84 clean clips (results/<tag>/followup/signal_harm.json).
+Stage knee (amendment 2026-11-25): the 78 clean clips without the backward-knee ones against all 84
+(results/<tag>/followup/knee_harm.json).
+Stage alias (amendment 2026-11-26): as signal, on clips_v9a (84 clean + 84 copies the policy cannot tell from them that
+reward other feet keypoints and contacts), plus both runs on the 168 test clips (results/<tag>/followup/alias_harm.json).
+Skipped where
 outputs exist, so the driver can be restarted.
 """
 
@@ -37,13 +42,13 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--gpus", type=int, nargs="+", required=True)
     p.add_argument("--tag", default="cv9")
-    p.add_argument("--stage", default="harm", choices=["harm", "budget", "systematic", "signal", "knee"])
+    p.add_argument("--stage", default="harm", choices=["harm", "budget", "systematic", "signal", "knee", "alias"])
     p.add_argument("--steps", type=int, default=200_000_000)
     p.add_argument("--rollouts", type=int, default=10)
     a = p.parse_args()
     P1 = os.path.join(rs.C, "results", a.tag)
     OUT = rs.OUT = os.path.join(P1, "followup")
-    for d in ("val", "launch"):
+    for d in ("val", "test", "launch"):
         os.makedirs(os.path.join(OUT, d), exist_ok=True)
     libs = {k: os.path.join(rs.C, v) for k, v in LEVELS.items()}
     rs.a = argparse.Namespace(lib=libs["c50"])  # each job sets its own CURATION_LIBRARY
@@ -105,20 +110,34 @@ def main():
                f"{harm:+.3f} {'PASS' if harm >= HARM else 'tolerated'}")
         return
 
-    if a.stage == "signal":
-        lib, out = os.path.join(rs.C, "data", "clips_v9v"), os.path.join(OUT, "val", "v9v_full_s0.json")
-        done = lambda n, g: futures.append(pool.submit(evaluate, n, lib, out, g))  # noqa: E731
-        S.wait_for([S.submit(f"{a.tag}f_v9v_full_s0", a.steps, prio=0, seed=0, env={"CURATION_LIBRARY": lib},
+    if a.stage in ("signal", "alias"):
+        name = {"signal": "v9v", "alias": "v9a"}[a.stage]
+        lib, out = os.path.join(rs.C, "data", f"clips_{name}"), os.path.join(OUT, "val", f"{name}_full_s0.json")
+        test = os.path.join(OUT, "test", f"{name}_full_s0.json")
+
+        def done(n, g):
+            futures.append(pool.submit(evaluate, n, lib, out, g))
+            if a.stage == "alias":  # secondary: the 168 test clips (the clean-only run's are test/knee84_s0.json)
+                futures.append(pool.submit(evaluate, n, lib, test, g, "test"))
+
+        S.wait_for([S.submit(f"{a.tag}f_{name}_full_s0", a.steps, prio=0, seed=0, env={"CURATION_LIBRARY": lib},
                              on_done=done)])
         while futures:
             futures.pop().result()
-        full, clean = val_e(out), val_e(os.path.join(P1, "dose", "val_cv9_dose_clean_s0.json"))
-        json.dump({"rule": f"val e(full) - val e(clean-only, the dose check's 84 clips) >= {HARM}", "library": "clips_v9v",
-                   "val_e_full": full, "val_e_clean_only": clean, "harm": full - clean,
-                   "passes": bool(full - clean >= HARM), "time": time.strftime("%Y-%m-%d %H:%M")},
-                  open(os.path.join(OUT, "signal_harm.json"), "w"), indent=1)
-        rs.log(f"signal harm: full {full:.3f} clean {clean:.3f} harm {full - clean:+.3f} "
-               f"{'PASS' if full - clean >= HARM else 'tolerated'}")
+        clean_val = os.path.join(P1, "dose", "val_cv9_dose_clean_s0.json")
+        full, clean = val_e(out), val_e(clean_val)
+        res = {"val_e_full": full, "val_e_clean_only": clean, "harm": full - clean, "passes": bool(full - clean >= HARM)}
+        if a.stage == "alias":
+            comp = lambda path, k: float(np.mean([v[k] for v in json.load(open(path))["clips"].values()]))  # noqa: E731
+            clean_test = os.path.join(OUT, "test", "knee84_s0.json")
+            res.update({f"{s}_{k}_{c}": comp(f, k) for s, (fa, fc) in (("val", (out, clean_val)), ("test", (test, clean_test)))
+                        for c, f in (("full", fa), ("clean_only", fc)) for k in ("keypoints", "legs_rms")},
+                       test_e_full=val_e(test), test_e_clean_only=val_e(clean_test))
+        json.dump({"rule": f"val e(full) - val e(clean-only, the dose check's 84 clips) >= {HARM}",
+                   "library": f"clips_{name}", **res, "time": time.strftime("%Y-%m-%d %H:%M")},
+                  open(os.path.join(OUT, f"{a.stage}_harm.json"), "w"), indent=1)
+        rs.log(f"{a.stage} harm: full {full:.3f} clean {clean:.3f} harm {full - clean:+.3f} "
+               f"{'PASS' if res['passes'] else 'tolerated'}")
         return
 
     if a.stage == "systematic":

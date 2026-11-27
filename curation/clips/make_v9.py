@@ -1347,6 +1347,115 @@ def verify_signals(lib_dir, lib, man, cl):
           f"copies differ from their clean clip only in {', '.join(SIGNAL_KEYS)}, exactly by their recorded error")
 
 
+# ----------------------------------------------------------------------------------------------- v9a: aliased
+ALIAS_KEYS = ("keypts", "contacts")  # rewarded, never observed: the only arrays a v9a copy changes
+KP_SIGMA = (0.5, 0.004, 0.03)  # tracking.py keypoint tolerance: clip(rel * amplitude, floor, cap)
+KP_PULL = 0.5 ** 0.5  # target miss in tolerances: exp(-(e / sigma)^2) is steepest at e = sigma / sqrt(2)
+
+
+def home_keypoints(blib, bman):
+    """Body-frame keypoints at the home pose: frame 0 of the head clips (legs and base at home); they must agree."""
+    k0 = np.array([blib["keypts"][c["index"], 0] for c in bman["clips"] if c["category"] == "head"])
+    assert np.abs(k0 - k0[0]).max() < 1e-4, "head clips do not start at one pose"
+    return k0[0]
+
+
+def kp_sigma(kp, home):
+    rel, floor, cap = KP_SIGMA
+    return float(np.clip(rel * np.mean(np.linalg.norm(kp - home, axis=-1)), floor, cap))
+
+
+def write_aliased(base_dir, out):
+    """v9a (PREREG v3 amendment 2026-11-26): the 84 clean train clips of clips_v9x plus one copy of each that the policy
+    cannot tell from it (joints, velocities, base pose: every observed reference channel bit for bit) but that rewards
+    something else: both foot keypoints shifted forward in the body frame by d (a retargeting offset), d set per clip so
+    that tracking the clean motion misses the copy's keypoint target by sigma / sqrt(2) under the copy's own tolerance,
+    and the foot contact labels swapped left / right. val / test as clips_v9x. Numpy only."""
+    blib = np.load(os.path.join(base_dir, "library.npz"))
+    bman = json.load(open(os.path.join(base_dir, "manifest.json")))
+    bcl, home = bman["clips"], home_keypoints(blib, bman)
+    clean = [c for c in bcl if c["split"] == "train" and not c.get("contaminant")]
+    keep = clean + [c for c in bcl if c["split"] != "train"]
+    arr = {k: [blib[k][c["index"]] for c in keep] for k in blib.files}
+    clips = [dict(c, index=i) for i, c in enumerate(keep)]
+    feet = [bman["keypoints"].index(n) for n in ("left_foot", "right_foot")]
+    for c in clean:
+        row = {k: blib[k][c["index"]].copy() for k in blib.files}
+        n = c["length"]
+
+        def shifted(d):
+            kp = row["keypts"][:n].copy()
+            kp[:, feet, 0] += d
+            return kp
+
+        lo, hi = 0.0, 0.2  # miss / sigma grows with d: bisect for KP_PULL
+        for _ in range(60):
+            d = (lo + hi) / 2
+            kp = shifted(d)
+            miss = np.mean(np.linalg.norm(kp - row["keypts"][:n], axis=-1))
+            lo, hi = (d, hi) if miss < KP_PULL * kp_sigma(kp, home) else (lo, d)
+        d = float(np.float32(round(d, 5)))
+        row["keypts"][:n, feet, 0] += np.float32(d)
+        row["contacts"] = row["contacts"][:, ::-1].copy()
+        kind = "alias_feet_fwd_contacts_swapped"
+        cid = f"{c['id']}__{kind}"
+        err = {"feet_kp_forward_m": d, "contacts_swapped": True,
+               "kp_sigma_m": kp_sigma(row["keypts"][:n], home), "kp_sigma_clean_m": kp_sigma(blib["keypts"][c["index"], :n], home)}
+        clips.append(dict(c, id=cid, source=cid, derived_from=c["id"], contaminant=kind, generator="aliased",
+                          index=len(clips), alias_error=err,
+                          feasibility=dict(c["feasibility"], corrupted=True, family="aliased", kind=kind)))
+        for k in blib.files:
+            arr[k].append(row[k])
+    kinds = dict(collections.Counter(c["contaminant"] for c in clips if c.get("generator") == "aliased"))
+    man = {k: v for k, v in bman.items() if k not in ("clips", "extended_from")}
+    man.update(edited_from=os.path.basename(os.path.normpath(base_dir)), aliased=kinds, clips=clips)
+    os.makedirs(out, exist_ok=True)
+    np.savez_compressed(os.path.join(out, "library.npz"), **{k: np.stack(v) for k, v in arr.items()})
+    json.dump(man, open(os.path.join(out, "manifest.json"), "w"), indent=1)
+    json.dump(sorted(c["id"] for c in clean), open(os.path.join(out, "clean_only.json"), "w"), indent=1)
+    ds = [c["alias_error"]["feet_kp_forward_m"] for c in clips if c.get("generator") == "aliased"]
+    print(f"wrote {out}: {len(clips)} clips, {len(clean)} clean + {len(clean)} aliased copies {kinds}; "
+          f"foot shift {1000 * min(ds):.1f} to {1000 * max(ds):.1f} mm (median {1000 * np.median(ds):.1f})")
+
+
+def verify_aliased(lib_dir, lib, man, cl):
+    """v9a: kept clips are their clips_v9x clips (entry except index, every array bit for bit); every copy equals its
+    clean clip in every array but ALIAS_KEYS, its feet keypoints are shifted forward by exactly its recorded d (all else
+    in keypts unchanged), its contacts are its clean clip's swapped, and the clean motion misses it by sigma / sqrt(2)."""
+    base_dir = os.path.join(os.path.dirname(os.path.normpath(lib_dir)), man["edited_from"])
+    blib = np.load(os.path.join(base_dir, "library.npz"))
+    bman = json.load(open(os.path.join(base_dir, "manifest.json")))
+    B, home = {c["id"]: c for c in bman["clips"]}, home_keypoints(blib, bman)
+    by_id = {c["id"]: c for c in cl}
+    kept = [c for c in cl if c.get("generator") != "aliased"]
+    for c in kept:
+        b = B[c["id"]]
+        assert {k: v for k, v in c.items() if k != "index"} == {k: v for k, v in b.items() if k != "index"}, c["id"]
+        for k in lib.files:
+            assert lib[k][c["index"]].tobytes() == blib[k][b["index"]].tobytes(), (c["id"], k)
+    assert {c["id"] for c in kept if c["split"] != "train"} == {i for i, b in B.items() if b["split"] != "train"}
+    al = [c for c in cl if c.get("generator") == "aliased"]
+    assert len(al) == sum(1 for c in kept if c["split"] == "train") == 84
+    feet = [man["keypoints"].index(n) for n in ("left_foot", "right_foot")]
+    other = [i for i in range(len(man["keypoints"])) if i not in feet]
+    misses = []
+    for c in al:
+        e, i, j, n = c["alias_error"], c["index"], by_id[c["derived_from"]]["index"], c["length"]
+        for k in lib.files:
+            if k not in ALIAS_KEYS:
+                assert lib[k][i].tobytes() == lib[k][j].tobytes(), (c["id"], k)
+        dk = lib["keypts"][i] - lib["keypts"][j]
+        assert np.allclose(dk[:n, feet, 0], e["feet_kp_forward_m"], atol=1e-6), c["id"]
+        assert not dk[:n, feet, 1:].any() and not dk[:, other].any() and not dk[n:].any(), c["id"]
+        assert np.array_equal(lib["contacts"][i], lib["contacts"][j][:, ::-1]), c["id"]
+        miss = np.mean(np.linalg.norm(dk[:n], axis=-1)) / kp_sigma(lib["keypts"][i, :n], home)
+        assert abs(miss - KP_PULL) < 0.01, (c["id"], miss)
+        misses.append(miss)
+    print(f"  {man['edited_from']}: {len(kept)} clips identical (entry + {len(lib.files)} arrays); {len(al)} aliased "
+          f"copies differ from their clean clip only in {', '.join(ALIAS_KEYS)} (feet keypoints forward by their recorded "
+          f"d, contacts swapped); clean motion misses each copy by {min(misses):.3f} to {max(misses):.3f} tolerances")
+
+
 # ----------------------------------------------------------------------------------------------- verify and doc
 def verify(lib_dir):
     lib = np.load(os.path.join(lib_dir, "library.npz"))
@@ -1390,6 +1499,8 @@ def verify(lib_dir):
         return verify_systematic(lib_dir, lib, man, cl)
     if man.get("signals"):
         return verify_signals(lib_dir, lib, man, cl)
+    if man.get("aliased"):
+        return verify_aliased(lib_dir, lib, man, cl)
     if man.get("extended_from"):  # v9x: every base clip unchanged (manifest entry and every array, bit for bit)
         base_dir = os.path.join(os.path.dirname(os.path.normpath(lib_dir)), man["extended_from"])
         blib = np.load(os.path.join(base_dir, "library.npz"))
@@ -1843,9 +1954,13 @@ def main():
     p.add_argument("--jobs", type=int, default=1, help="v9c: worker processes for the impossible candidates")
     p.add_argument("--systematic", metavar="V9X_DIR", help="v9s: keep val / test, replace 3 train clips per type by wrong ones")
     p.add_argument("--signals", metavar="V9X_DIR", help="v9v: clean train + one copy each with inconsistent signals")
+    p.add_argument("--aliased", metavar="V9X_DIR", help="v9a: clean train + one copy each the policy cannot tell apart "
+                   "that rewards other feet keypoints and contacts")
     a = p.parse_args()
     if a.signals:
         return write_signals(a.signals, *a.out)
+    if a.aliased:
+        return write_aliased(a.aliased, *a.out)
     if a.out and not a.contaminate:
         (a.out,) = a.out
     if a.presets:
