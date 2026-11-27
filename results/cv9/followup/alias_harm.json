@@ -1,0 +1,19 @@
+{
+ "rule": "val e(full) - val e(clean-only, the dose check's 84 clips) >= 0.1",
+ "library": "clips_v9a",
+ "val_e_full": 0.39699838241296154,
+ "val_e_clean_only": 0.36078359419036476,
+ "harm": 0.03621478822259677,
+ "passes": false,
+ "val_keypoints_full": 0.0027622500872461217,
+ "val_legs_rms_full": 0.024852505242562894,
+ "val_keypoints_clean_only": 0.00199705845415814,
+ "val_legs_rms_clean_only": 0.024808428129403003,
+ "test_keypoints_full": 0.002665436930034221,
+ "test_legs_rms_full": 0.022909293423817007,
+ "test_keypoints_clean_only": 0.0018345826989389028,
+ "test_legs_rms_clean_only": 0.022625772296755928,
+ "test_e_full": 0.3681198149742115,
+ "test_e_clean_only": 0.32785769472164766,
+ "time": "2026-11-26 23:01"
+}
